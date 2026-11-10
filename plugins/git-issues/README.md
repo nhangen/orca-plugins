@@ -104,4 +104,4 @@ orca plugin check ./plugins/git-issues
 
 ## License
 
-MIT © [Nathan Hangen](https://github.com/nhangen)
+MIT © [nhangen](https://github.com/nhangen)
