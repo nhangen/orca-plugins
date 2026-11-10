@@ -470,16 +470,18 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('repo.chooseWorkspace', async (input: { path?: string }) => {
     const path = typeof input?.path === 'string' ? input.path : null
-    if (path && existsSync(path)) {
+    if (path) {
       try {
         const context = await orca.host.call('workspace.readContext')
-        const branch = context?.branch ? stripRef(context.branch) : null
-        const key = choiceKey(branch, context?.displayName ?? null)
-        state.sessionChoices.set(key, path)
-        await updateStoredChoices(orca, (choices) => {
-          choices.set(key, path)
-          return true
-        })
+        const list = await orca.host.call('workspace.list')
+        const resolution = resolveWorkspace(context, (list?.workspaces ?? []) as WorkspaceEntry[], state.sessionChoices)
+        if (resolution.ambiguous && resolution.candidates.some((c) => c.path === path)) {
+          state.sessionChoices.set(resolution.key, path)
+          await updateStoredChoices(orca, (choices) => {
+            choices.set(resolution.key, path)
+            return true
+          })
+        }
       } catch (err: any) {
         console.error('git-issues: could not persist workspace pick:', err?.message || String(err))
       }

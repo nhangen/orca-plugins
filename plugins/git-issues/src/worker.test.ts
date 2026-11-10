@@ -227,6 +227,19 @@ test('a pick made in one worker does not leak into a freshly mounted one', withT
   }
 ))
 
+test('chooseWorkspace refuses an existing path that is not one of the current candidates', withTempWorkspaces(
+  ['wb-alice', 'wb-bob', 'wb-outsider'],
+  async ([alice, bob, outsider]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = baseHost([entry(alice), entry(bob)]) as any
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.chooseWorkspace', { path: outsider })) as any
+    assert.equal(result.workspacePath, alice)
+    assert.equal(host.data().storage.workspaceChoices, undefined)
+    await worker.deactivate()
+  }
+))
+
 test('worker prefers a worktree whose branch matches the focused branch', withTempWorkspaces(
   ['my-project', 'my-project.wt'],
   async ([folderPath, worktreePath]) => {
