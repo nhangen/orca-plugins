@@ -294,6 +294,54 @@ test('a slow collect for an earlier focus is not posted after a newer one', with
   }
 ))
 
+test('a uniquely named folder workspace beats an unrelated clone on the focused branch', withTempWorkspaces(
+  ['my-project', 'other-clone'],
+  async ([folder, clone]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', path: clone, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'folder', name: 'my-project', path: folder, branch: null, hostId: null }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, folder)
+    assert.ok(!result.ambiguous)
+    await worker.deactivate()
+  }
+))
+
+test('with no match the folder workspace is the default among the flagged candidates', withTempWorkspaces(
+  ['wb-wt', 'wb-folder'],
+  async ([wt, folder]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'release', displayName: 'release', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', path: wt, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'folder', name: 'notes', path: folder, branch: null, hostId: null }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.ok(result.ambiguous)
+    assert.equal(result.workspacePath, folder)
+    await worker.deactivate()
+  }
+))
+
 test('labels stay distinct when the last two folders also match', async () => {
   const root = mkdtempSync(join(tmpdir(), 'wb-deep-'))
   const a = join(root, 'a', 'code', 'foo')

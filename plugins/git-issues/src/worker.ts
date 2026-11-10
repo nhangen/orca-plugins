@@ -346,7 +346,9 @@ export function resolveWorkspace(
   const onBranch = activeBranch != null ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch) : []
   const named = displayName != null ? pool.filter((w) => w.name === displayName) : []
   const both = onBranch.filter((w) => named.includes(w))
-  const matched = both.length > 0 ? both : onBranch.length > 0 ? onBranch : named
+  // A folder workspace has no branch, so its name is the only signal that can match it.
+  const namedFolders = named.filter((w) => w.branch == null)
+  const matched = [both, namedFolders, onBranch, named].find((list) => list.length > 0) ?? []
   const matches = matched.length > 0 ? matched : pool
 
   if (matches.length === 1) {
