@@ -317,12 +317,16 @@ function isLocalWorkspace(w: WorkspaceEntry): boolean {
   return (w.hostId == null || w.hostId === 'local') && existsSync(w.path)
 }
 
+/** The shortest trailing run of folders that tells each path apart from the others. */
 function candidateLabels(paths: string[]): string[] {
   const segments = paths.map((p) => p.split('/').filter(Boolean))
-  const base = segments.map((s) => s[s.length - 1] ?? '')
   return segments.map((s, i) => {
-    const collides = base.filter((b) => b === base[i]).length > 1
-    return (collides ? s.slice(-2).join('/') : base[i]) || paths[i]
+    for (let depth = 1; depth <= s.length; depth++) {
+      const label = s.slice(-depth).join('/')
+      const clash = segments.some((other, j) => j !== i && other.slice(-depth).join('/') === label)
+      if (!clash) return label
+    }
+    return paths[i]
   })
 }
 

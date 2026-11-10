@@ -294,6 +294,23 @@ test('a slow collect for an earlier focus is not posted after a newer one', with
   }
 ))
 
+test('labels stay distinct when the last two folders also match', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wb-deep-'))
+  const a = join(root, 'a', 'code', 'foo')
+  const b = join(root, 'b', 'code', 'foo')
+  mkdirSync(a, { recursive: true })
+  mkdirSync(b, { recursive: true })
+  try {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const worker = await mountWorker(main, { host: baseHost([entry(a), entry(b)]) as any })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.deepEqual(result.candidates.map((c: any) => c.name), ['a/code/foo', 'b/code/foo'])
+    await worker.deactivate()
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('worker prefers a worktree whose branch matches the focused branch', withTempWorkspaces(
   ['my-project', 'my-project.wt'],
   async ([folderPath, worktreePath]) => {
