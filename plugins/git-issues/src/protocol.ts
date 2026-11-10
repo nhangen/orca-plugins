@@ -64,7 +64,7 @@ declare module 'orca' {
   interface PluginRequests {
     /** Gets the current repository context (issues, branches, current branch, and repo slug). */
     'repo.getContext': {
-      input?: { forceRefresh?: boolean }
+      input: { forceRefresh?: boolean }
       output: RepoContext
     }
     /** Sets the user's workspace pick for an ambiguous focused context and returns a fresh context. */

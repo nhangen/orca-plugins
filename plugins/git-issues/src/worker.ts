@@ -386,9 +386,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     console.error('git-issues: could not resolve the focused workspace:', err?.message || String(err))
   }
 
-  if (!workspacePath) {
-    workspacePath = process.cwd()
-  }
+  const cwd = workspacePath ?? process.cwd()
 
   let branches: GitBranch[] = []
   let branchesError: string | null = null
@@ -398,7 +396,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     const { stdout } = await exec(
       'git',
       ['branch', '--list', '--format=%(refname:short)|%(HEAD)|%(upstream:short)|%(subject)|%(committerdate:iso)'],
-      { cwd: workspacePath, env: EXEC_ENV }
+      { cwd, env: EXEC_ENV }
     )
     const parsed = parseGitBranches(stdout)
     branches = parsed.branches
@@ -411,7 +409,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
 
   let repoSlug: string | null = null
   try {
-    const { stdout } = await exec('git', ['remote', 'get-url', 'origin'], { cwd: workspacePath, env: EXEC_ENV })
+    const { stdout } = await exec('git', ['remote', 'get-url', 'origin'], { cwd, env: EXEC_ENV })
     repoSlug = parseGitRemote(stdout)
   } catch {
     // No git remote origin
@@ -424,8 +422,8 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
 
   if (repoSlug) {
     const [issuesResult, prsResult] = await Promise.all([
-      fetchGitHubIssues(repoSlug, workspacePath),
-      fetchPullRequests(repoSlug, workspacePath)
+      fetchGitHubIssues(repoSlug, cwd),
+      fetchPullRequests(repoSlug, cwd)
     ])
     issues = issuesResult.issues
     if (issuesResult.error) issuesError = issuesResult.error
@@ -439,7 +437,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
   const result: RepoContext = {
     repoSlug,
     currentBranch,
-    workspacePath,
+    workspacePath: cwd,
     issues,
     pullRequests,
     branches,
