@@ -349,7 +349,7 @@ test('a uniquely named folder workspace beats an unrelated clone on the focused 
   }
 ))
 
-test('with no match the folder workspace is the default among the flagged candidates', withTempWorkspaces(
+test('with no match a folder workspace is not guessed either', withTempWorkspaces(
   ['wb-wt', 'wb-folder'],
   async ([wt, folder]) => {
     const host = mockHost({
@@ -367,8 +367,9 @@ test('with no match the folder workspace is the default among the flagged candid
     })
     const worker = await mountWorker(main, { host })
     const result = (await worker.request('repo.getContext')) as any
-    assert.ok(result.ambiguous)
-    assert.equal(result.workspacePath, folder)
+    assert.equal(result.workspacePath, null)
+    assert.ok(!result.ambiguous)
+    assert.equal(result.branchesError, 'No local workspace matches the focused workspace')
     await worker.deactivate()
   }
 ))
@@ -542,7 +543,7 @@ test('remote-only matches never become the repo the worker runs git in', async (
   await worker.deactivate()
 })
 
-test('no workspace matching the focused branch or name is flagged rather than guessed', withTempWorkspaces(
+test('no workspace matching the focused branch or name is reported rather than guessed', withTempWorkspaces(
   ['wb-one', 'wb-two'],
   async ([one, two]) => {
     const host = mockHost({
@@ -560,8 +561,58 @@ test('no workspace matching the focused branch or name is flagged rather than gu
     })
     const worker = await mountWorker(main, { host })
     const result = (await worker.request('repo.getContext')) as any
-    assert.ok(result.ambiguous)
-    assert.deepEqual(result.candidates.map((c: any) => c.path), [one, two])
+    assert.equal(result.workspacePath, null)
+    assert.ok(!result.ambiguous)
+    assert.equal(result.candidates, undefined)
+    assert.equal(result.issuesError, 'No local workspace matches the focused workspace')
+    await worker.deactivate()
+  }
+))
+
+test('a single local workspace that does not match the focused one is not used', withTempWorkspaces(
+  ['wb-only'],
+  async ([only]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'feature-x', displayName: 'feature-x', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', path: only, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'worktree', name: 'feature-x', path: '/remote/x', branch: 'feature-x', hostId: 'ssh-box' }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, null)
+    assert.ok(!result.ambiguous)
+    assert.equal(result.branchesError, 'No local workspace matches the focused workspace')
+    assert.deepEqual(result.branches, [])
+    await worker.deactivate()
+  }
+))
+
+test('with nothing focused no workspace is guessed', withTempWorkspaces(
+  ['wb-only'],
+  async ([only]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': null,
+        'workspace.list': {
+          workspaces: [{ id: 'w0', kind: 'worktree', name: 'main', path: only, branch: 'main', hostId: null }],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, null)
+    assert.ok(!result.ambiguous)
+    assert.deepEqual(result.branches, [])
     await worker.deactivate()
   }
 ))

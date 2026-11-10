@@ -367,14 +367,16 @@ export function resolveWorkspace(
   const both = onBranch.filter((w) => named.includes(w))
   // A folder workspace has no branch, so its name is the only signal that can match it.
   const namedFolders = named.filter((w) => w.branch == null)
-  const matched = [both, namedFolders, onBranch, named].find((list) => list.length > 0) ?? []
-  const matches = matched.length > 0 ? matched : pool
+  const matches = [both, namedFolders, onBranch, named].find((list) => list.length > 0) ?? []
+  if (matches.length === 0) {
+    return { workspacePath: null, activeBranch, key, ambiguous: false, candidates: [] }
+  }
 
   if (matches.length === 1) {
     return { workspacePath: matches[0].path, activeBranch, key, ambiguous: false, candidates: [] }
   }
 
-  const fallback = matched.length > 0 ? matches[0] : (matches.find((w) => w.kind === 'folder') ?? matches[0])
+  const fallback = matches[0]
   const preferred = choices.get(key)
   const labels = candidateLabels(matches.map((w) => w.path))
   return {
