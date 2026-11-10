@@ -471,15 +471,14 @@ async function publish(orca: OrcaWorkerApi, state: WorkerState, context: RepoCon
   if (testHooks.beforePublish) await testHooks.beforePublish(context)
   const serialized = JSON.stringify(context)
   const sanitized: RepoContext = JSON.parse(serialized)
+  if (context.requestedAt < state.latestPostedRequestedAt) return sanitized
+  state.latestPostedRequestedAt = context.requestedAt
   try {
     await orca.storage.set(STORAGE_KEY, JSON.parse(serialized))
   } catch {
     // storage cache save is non-blocking
   }
-  if (context.requestedAt >= state.latestPostedRequestedAt) {
-    state.latestPostedRequestedAt = context.requestedAt
-    orca.panels.post('repo.changed', sanitized)
-  }
+  orca.panels.post('repo.changed', sanitized)
   return sanitized
 }
 

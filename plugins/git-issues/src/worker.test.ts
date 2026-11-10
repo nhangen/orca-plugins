@@ -278,6 +278,8 @@ test('a slow collect for an earlier focus is not posted after a newer one', with
         await held
       }
     }
+    const realNow = Date.now
+    Date.now = () => 1_700_000_000_000
     try {
       const slow = worker.request('repo.getContext')
       await slowAtPublish
@@ -286,8 +288,10 @@ test('a slow collect for an earlier focus is not posted after a newer one', with
       release()
       await slow
     } finally {
+      Date.now = realNow
       main.testHooks.beforePublish = null
     }
+    assert.equal((host.data().storage.latestContext as any).workspacePath, b)
     const posted = worker.posts.slice(before).filter((p) => p.event === 'repo.changed').map((p) => (p.payload as any).workspacePath)
     assert.deepEqual(posted, [b])
     await worker.deactivate()
