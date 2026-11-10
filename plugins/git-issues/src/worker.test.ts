@@ -432,6 +432,24 @@ test('a context with no local workspace reports it instead of running git elsewh
   await worker.deactivate()
 })
 
+test('a failed workspace read is reported as itself, not as a missing workspace', async () => {
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    results: {
+      'workspace.readContext': () => {
+        throw hostError('action_failed', 'host unavailable')
+      },
+      'workspace.list': { workspaces: [], truncated: false }
+    }
+  })
+  const worker = await mountWorker(main, { host })
+  const result = (await worker.request('repo.getContext')) as any
+  assert.equal(result.workspacePath, null)
+  assert.match(result.branchesError, /host unavailable/)
+  assert.match(result.issuesError, /host unavailable/)
+  await worker.deactivate()
+})
+
 test('labels stay distinct when the last two folders also match', async () => {
   const root = mkdtempSync(join(tmpdir(), 'wb-deep-'))
   const a = join(root, 'a', 'code', 'foo')

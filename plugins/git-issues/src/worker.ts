@@ -393,6 +393,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
   let activeBranch: string | null = null
   let contextCandidates: RepoCandidate[] | undefined
   let ambiguous = false
+  let resolveError: string | null = null
 
   try {
     const context = await orca.host.call('workspace.readContext')
@@ -408,6 +409,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     workspacePath = resolution.workspacePath
     ambiguous = resolution.ambiguous
   } catch (err: any) {
+    resolveError = `Could not read Orca workspaces: ${err?.message || String(err)}`
     console.error('git-issues: could not resolve the focused workspace:', err?.message || String(err))
   }
 
@@ -421,7 +423,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
   let prsError: string | null = null
 
   if (!workspacePath) {
-    const noWorkspace = 'No local workspace matches the focused workspace'
+    const noWorkspace = resolveError ?? 'No local workspace matches the focused workspace'
     branchesError = noWorkspace
     issuesError = noWorkspace
     prsError = noWorkspace
