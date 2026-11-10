@@ -68,5 +68,17 @@ export default defineCheck({
     requests: {
       'repo.getContext': () => mockContext
     }
+  },
+  ambiguous: {
+    requests: {
+      'repo.getContext': () => ({
+        ...mockContext,
+        ambiguous: true,
+        candidates: [
+          { path: '/Users/nhangen/code/llm-tools', name: 'llm-tools' },
+          { path: '/Users/nhangen/code/claude-ceo', name: 'claude-ceo' }
+        ]
+      })
+    }
   }
 })
