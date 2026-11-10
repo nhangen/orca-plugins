@@ -39,7 +39,9 @@ export const branchSearch = atom<string>('')
 /** A slower, earlier collect can finish last, so contexts are ordered by when they were requested. */
 function applyContext(data: RepoContext): void {
   const current = read(repoContext)
-  if (!current || data.requestedAt >= current.requestedAt) set(repoContext, data)
+  if (!current || data.workerEpoch !== current.workerEpoch || data.requestedAt >= current.requestedAt) {
+    set(repoContext, data)
+  }
 }
 
 export async function refresh(force = true): Promise<void> {

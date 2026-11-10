@@ -8,6 +8,7 @@ const sampleContext: RepoContext = {
   workspacePath: '/mock/path/test-repo',
   fetchedAt: 1700000000000,
   requestedAt: 1700000000000,
+  workerEpoch: 'epoch-a',
   issues: [
     {
       number: 42,
@@ -174,5 +175,16 @@ test('shows the workspace picker while ambiguous and applies a pick', async () =
   await view.settled()
   assert.deepEqual(picks, ['/code/beta'])
   assert.ok(view.find({ text: 'owner/beta' }))
+  await view.unmount()
+})
+
+test('accepts an older stamp from a restarted worker', async () => {
+  const host = mockHost({ requests: { 'repo.getContext': () => sampleContext } })
+  const view = await mount(panel, { host })
+  await view.settled()
+  const restarted: RepoContext = { ...sampleContext, repoSlug: 'owner/restarted', workerEpoch: 'epoch-b', requestedAt: sampleContext.requestedAt - 60000 }
+  await view.post('repo.changed', restarted)
+  await view.settled()
+  assert.ok(view.find({ text: 'owner/restarted' }))
   await view.unmount()
 })

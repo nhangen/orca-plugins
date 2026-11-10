@@ -54,6 +54,8 @@ export interface RepoContext {
   fetchedAt: number
   /** When collection started; orders contexts, since a slower, earlier collect can finish last. */
   requestedAt: number
+  /** Identifies the worker run; requestedAt is only comparable within one epoch. */
+  workerEpoch: string
   /** True when several workspaces share the focused branch+name and Orca does not expose which is focused. */
   ambiguous?: boolean
   /** The indistinguishable workspaces the panel can pick between when `ambiguous`. */

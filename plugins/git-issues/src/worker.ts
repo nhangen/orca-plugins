@@ -1,5 +1,6 @@
 // The plugin's own worker running in Node.js on the Orca host.
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
@@ -18,6 +19,8 @@ export interface WorkerState {
   sessionChoices: Map<string, string>
   latestPostedRequestedAt: number
   lastRequestedAt: number
+  /** requestedAt only orders contexts from one worker; a restarted worker starts a new epoch. */
+  epoch: string
   /** Serializes CHOICES_KEY read-modify-writes so a prune cannot overwrite a concurrent pick. */
   choicesQueue: Promise<void>
 }
@@ -27,6 +30,7 @@ export function createWorkerState(): WorkerState {
     sessionChoices: new Map(),
     latestPostedRequestedAt: 0,
     lastRequestedAt: 0,
+    epoch: randomUUID(),
     choicesQueue: Promise.resolve()
   }
 }
@@ -472,6 +476,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     branchesError,
     fetchedAt: Date.now(),
     requestedAt,
+    workerEpoch: state.epoch,
     ambiguous,
     candidates: contextCandidates
   }
