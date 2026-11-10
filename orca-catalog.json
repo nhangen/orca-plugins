@@ -1,0 +1,45 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-catalog.v2.schema.json",
+  "catalogVersion": 2,
+  "name": "Nathan Hangen Plugins",
+  "owner": "nhangen",
+  "plugins": [
+    {
+      "id": "nhangen.git-issues",
+      "description": "Show GitHub issues, pull requests, and git branches for the currently loaded repository in Orca's sidebar.",
+      "categories": [
+        "panels"
+      ],
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/nhangen/orca-plugins.git",
+        "ref": "main",
+        "path": "plugins/git-issues"
+      },
+      "releases": [
+        {
+          "version": "0.1.0",
+          "commit": "2c8598513b9dee5f09d257763db14219a887187c",
+          "contentHash": "7c5d6b8d32785d801efd0b8373c35f822639fe3eadaccc35158ba6db7e26d678",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Git Issues, PRs & Branches",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Git Issues, PRs & Branches"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            }
+          ],
+          "capabilities": [
+            "storage:own",
+            "workspace:read"
+          ]
+        }
+      ]
+    }
+  ]
+}
