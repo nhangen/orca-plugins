@@ -18,6 +18,28 @@
       },
       "releases": [
         {
+          "version": "0.1.2",
+          "commit": "a477d0809bebb6f4de3b6df1b8006a36d2af10d2",
+          "contentHash": "2a03156a2e8cbbc2bfbfe1b05fc59c93f9d25c48376afb6be26b5fd19711a35c",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Git Issues, PRs & Branches",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Git Issues, PRs & Branches"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            }
+          ],
+          "capabilities": [
+            "storage:own",
+            "workspace:read"
+          ]
+        },
+        {
           "version": "0.1.1",
           "commit": "65297f41891e0e0779a3701c21e9f37976e9fe92",
           "contentHash": "5d39cd6a9017a7ee07db7daefd13b08f51d5d61c94ad04175c9a9dc25133b688",
