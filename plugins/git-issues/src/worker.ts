@@ -392,58 +392,63 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     console.error('git-issues: could not resolve the focused workspace:', err?.message || String(err))
   }
 
-  const cwd = workspacePath ?? process.cwd()
-
   let branches: GitBranch[] = []
   let branchesError: string | null = null
   let detectedHead: string | null = null
-
-  try {
-    const { stdout } = await exec(
-      'git',
-      ['branch', '--list', '--format=%(refname:short)|%(HEAD)|%(upstream:short)|%(subject)|%(committerdate:iso)'],
-      { cwd, env: EXEC_ENV }
-    )
-    const parsed = parseGitBranches(stdout)
-    branches = parsed.branches
-    detectedHead = parsed.currentBranch
-  } catch (err: any) {
-    branchesError = `Git branch error: ${err?.message || String(err)}`
-  }
-
-  const currentBranch = detectedHead ?? activeBranch
-
   let repoSlug: string | null = null
-  try {
-    const { stdout } = await exec('git', ['remote', 'get-url', 'origin'], { cwd, env: EXEC_ENV })
-    repoSlug = parseGitRemote(stdout)
-  } catch {
-    // No git remote origin
-  }
-
   let issues: GitIssue[] = []
   let pullRequests: GitPullRequest[] = []
   let issuesError: string | null = null
   let prsError: string | null = null
 
-  if (repoSlug) {
-    const [issuesResult, prsResult] = await Promise.all([
-      fetchGitHubIssues(repoSlug, cwd),
-      fetchPullRequests(repoSlug, cwd)
-    ])
-    issues = issuesResult.issues
-    if (issuesResult.error) issuesError = issuesResult.error
-    pullRequests = prsResult.pullRequests
-    if (prsResult.error) prsError = prsResult.error
+  if (!workspacePath) {
+    const noWorkspace = 'No local workspace matches the focused workspace'
+    branchesError = noWorkspace
+    issuesError = noWorkspace
+    prsError = noWorkspace
   } else {
-    issuesError = 'No GitHub remote origin found for this workspace'
-    prsError = 'No GitHub remote origin found for this workspace'
+    const cwd = workspacePath
+    try {
+      const { stdout } = await exec(
+        'git',
+        ['branch', '--list', '--format=%(refname:short)|%(HEAD)|%(upstream:short)|%(subject)|%(committerdate:iso)'],
+        { cwd, env: EXEC_ENV }
+      )
+      const parsed = parseGitBranches(stdout)
+      branches = parsed.branches
+      detectedHead = parsed.currentBranch
+    } catch (err: any) {
+      branchesError = `Git branch error: ${err?.message || String(err)}`
+    }
+
+    try {
+      const { stdout } = await exec('git', ['remote', 'get-url', 'origin'], { cwd, env: EXEC_ENV })
+      repoSlug = parseGitRemote(stdout)
+    } catch {
+      // No git remote origin
+    }
+
+    if (repoSlug) {
+      const [issuesResult, prsResult] = await Promise.all([
+        fetchGitHubIssues(repoSlug, cwd),
+        fetchPullRequests(repoSlug, cwd)
+      ])
+      issues = issuesResult.issues
+      if (issuesResult.error) issuesError = issuesResult.error
+      pullRequests = prsResult.pullRequests
+      if (prsResult.error) prsError = prsResult.error
+    } else {
+      issuesError = 'No GitHub remote origin found for this workspace'
+      prsError = 'No GitHub remote origin found for this workspace'
+    }
   }
+
+  const currentBranch = detectedHead ?? activeBranch
 
   const result: RepoContext = {
     repoSlug,
     currentBranch,
-    workspacePath: cwd,
+    workspacePath,
     issues,
     pullRequests,
     branches,

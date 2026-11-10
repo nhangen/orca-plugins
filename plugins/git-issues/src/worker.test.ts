@@ -342,6 +342,18 @@ test('with no match the folder workspace is the default among the flagged candid
   }
 ))
 
+test('a context with no local workspace reports it instead of running git elsewhere', async () => {
+  const host = baseHost([
+    { id: 'w0', kind: 'worktree', name: 'main', path: '/remote/a', branch: 'main', hostId: 'ssh-buildbox' }
+  ]) as any
+  const worker = await mountWorker(main, { host })
+  const result = (await worker.request('repo.getContext')) as any
+  assert.equal(result.workspacePath, null)
+  assert.equal(result.repoSlug, null)
+  assert.match(result.branchesError, /No local workspace/)
+  await worker.deactivate()
+})
+
 test('labels stay distinct when the last two folders also match', async () => {
   const root = mkdtempSync(join(tmpdir(), 'wb-deep-'))
   const a = join(root, 'a', 'code', 'foo')
@@ -428,7 +440,7 @@ test('remote-only matches never become the repo the worker runs git in', async (
   ]) as any
   const worker = await mountWorker(main, { host })
   const result = (await worker.request('repo.getContext')) as any
-  assert.equal(result.workspacePath, process.cwd())
+  assert.equal(result.workspacePath, null)
   assert.ok(!result.ambiguous)
   assert.equal(result.candidates, undefined)
   await worker.deactivate()
