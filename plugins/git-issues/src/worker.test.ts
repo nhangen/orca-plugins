@@ -33,6 +33,10 @@ test('parseGitRemote parses SSH and HTTPS GitHub urls', () => {
   assert.equal(parseGitRemote('https://github.com/owner/repo.git'), 'owner/repo')
   assert.equal(parseGitRemote('https://github.com/owner/repo'), 'owner/repo')
   assert.equal(parseGitRemote('not-a-repo'), null)
+  assert.equal(parseGitRemote('git@github.com:owner/.github.git'), 'owner/.github')
+  assert.equal(parseGitRemote('https://github.com/../..'), null)
+  assert.equal(parseGitRemote('git@github.com:owner/..'), null)
+  assert.equal(parseGitRemote('git@github.com:./repo.git'), null)
 })
 
 test('parseGitBranches parses git branch output correctly', () => {

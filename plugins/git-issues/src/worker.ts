@@ -78,7 +78,9 @@ export function parseGitRemote(url: string): string | null {
   const trimmed = url.trim()
   const match = trimmed.match(/[:/]([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?$/)
   if (!match) return null
-  return `${match[1]}/${match[2]}`
+  const [, owner, repo] = match
+  if ([owner, repo].some((segment) => segment === '.' || segment === '..')) return null
+  return `${owner}/${repo}`
 }
 
 export function parseGitBranches(stdout: string): { branches: GitBranch[]; currentBranch: string | null } {
