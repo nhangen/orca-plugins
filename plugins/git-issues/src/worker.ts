@@ -8,48 +8,64 @@ import type { GitBranch, GitIssue, GitPullRequest, RepoCandidate, RepoContext } 
 
 const exec = promisify(execFile)
 const STORAGE_KEY = 'latestContext'
+// Orca reports the focused workspace as {branch, displayName} only, and names every root clone after
+// its branch, so separate repos on their default branch are indistinguishable; the user's pick for
+// such a context is stored per branch+name key.
 const CHOICES_KEY = 'workspaceChoices'
-// Orca lists every root clone as a worktree named after its checked-out branch, and the focused
-// workspace API exposes only {branch, name}; separate repos on their default branch are therefore
-// indistinguishable, so the user's pick is stored per branch+name key.
-const EXACT = 'exact'
-const AMBIGUOUS = 'ambiguous'
 
-/** In-memory mirror of CHOICES_KEY so a pick applies immediately, before storage is re-read. */
-const memoryChoices = new Map<string, string>()
+export interface WorkerState {
+  /** Picks made this session; they win over storage so a pick holds even when the write failed. */
+  sessionChoices: Map<string, string>
+}
 
-/** Storage entries alone (hydration and choose-workspace writes). */
-function parseStoredChoices(stored: unknown): Map<string, string> {
-  // Hosts return {value: JsonValue}; raw stored objects are tolerated for test ergonomics.
-  const raw = (stored as { value?: JsonValue } | null | undefined)?.value ?? stored
+export function createWorkerState(): WorkerState {
+  return { sessionChoices: new Map() }
+}
+
+function parseStoredChoices(stored: JsonValue | null): Map<string, string> {
   const map = new Map<string, string>()
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    for (const [key, path] of Object.entries(raw)) {
+  if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+    for (const [key, path] of Object.entries(stored)) {
       if (typeof path === 'string') map.set(key, path)
     }
   }
   return map
 }
 
-/** Memory first (a just-made pick applies before storage confirms), storage entries after. */
-function readChoices(stored: { value?: JsonValue } | null | undefined): Map<string, string> {
-  const map = new Map<string, string>(memoryChoices)
-  for (const [key, path] of parseStoredChoices(stored)) map.set(key, path)
-  return map
+async function readChoices(orca: OrcaWorkerApi, state: WorkerState): Promise<Map<string, string>> {
+  let stored = new Map<string, string>()
+  try {
+    stored = parseStoredChoices(await orca.storage.get(CHOICES_KEY))
+  } catch (err: any) {
+    console.error('git-issues: could not read workspace picks:', err?.message || String(err))
+  }
+  return new Map([...stored, ...state.sessionChoices])
 }
 
-/** Drops picks whose workspace path no longer exists on this machine, and mirrors the survivors into memory. */
-function pruneChoices(choices: Map<string, string>): boolean {
-  let changed = false
-  for (const [key, path] of choices) {
-    if (!existsSync(path)) {
-      choices.delete(key)
-      changed = true
-    }
+/** Re-reads storage right before writing so a concurrent pick or prune is not overwritten. */
+async function updateStoredChoices(orca: OrcaWorkerApi, mutate: (choices: Map<string, string>) => boolean): Promise<void> {
+  const choices = parseStoredChoices(await orca.storage.get(CHOICES_KEY))
+  if (mutate(choices)) await orca.storage.set(CHOICES_KEY, Object.fromEntries(choices))
+}
+
+async function pruneChoices(orca: OrcaWorkerApi, state: WorkerState): Promise<void> {
+  for (const [key, path] of state.sessionChoices) {
+    if (!existsSync(path)) state.sessionChoices.delete(key)
   }
-  memoryChoices.clear()
-  for (const [key, path] of choices) memoryChoices.set(key, path)
-  return changed
+  try {
+    await updateStoredChoices(orca, (choices) => {
+      let changed = false
+      for (const [key, path] of choices) {
+        if (!existsSync(path)) {
+          choices.delete(key)
+          changed = true
+        }
+      }
+      return changed
+    })
+  } catch (err: any) {
+    console.error('git-issues: could not prune workspace picks:', err?.message || String(err))
+  }
 }
 
 const EXEC_ENV = {
@@ -274,7 +290,7 @@ function choiceKey(branch: string | null, displayName: string | null): string {
   return `${branch ?? '-'}|${displayName ?? '-'}`
 }
 
-export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoContext> {
+export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState = createWorkerState()): Promise<RepoContext> {
   let workspacePath: string | null = null
   let activeBranch: string | null = null
   let contextCandidates: RepoCandidate[] | undefined
@@ -305,14 +321,8 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
         const candidates = matches.map((w) => ({ path: w.path, name: w.path.split('/').filter(Boolean).pop() ?? w.path }))
         if (matches.length > 1) {
           ambiguous = true
-          const choices = readChoices(await orca.storage.get(CHOICES_KEY))
-          if (pruneChoices(choices)) {
-            try {
-              await orca.storage.set(CHOICES_KEY, Object.fromEntries(choices))
-            } catch {
-              // best-effort cleanup; next pass retries
-            }
-          }
+          await pruneChoices(orca, state)
+          const choices = await readChoices(orca, state)
           const preferred = context ? choices.get(choiceKey(activeBranch, context.displayName ?? null)) : undefined
           workspacePath = matches.find((w) => w.path === preferred)?.path ?? matches[0].path
         } else {
@@ -397,14 +407,11 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
   return result
 }
 
-export function sanitize(context: RepoContext): RepoContext {
-  return JSON.parse(JSON.stringify(context)) as RepoContext
-}
-
 async function publish(orca: OrcaWorkerApi, context: RepoContext): Promise<RepoContext> {
-  const sanitized = sanitize(context)
+  const serialized = JSON.stringify(context)
+  const sanitized: RepoContext = JSON.parse(serialized)
   try {
-    await orca.storage.set(STORAGE_KEY, sanitized)
+    await orca.storage.set(STORAGE_KEY, JSON.parse(serialized))
   } catch {
     // storage cache save is non-blocking
   }
@@ -413,48 +420,37 @@ async function publish(orca: OrcaWorkerApi, context: RepoContext): Promise<RepoC
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
-  void orca.storage
-    .get(CHOICES_KEY)
-    .then((stored) => {
-      memoryChoices.clear()
-      for (const [key, path] of parseStoredChoices(stored)) memoryChoices.set(key, path)
-    })
-    .catch(() => {
-      // hydration is best-effort; collect falls back to storage reads
-    })
+  const state = createWorkerState()
 
   orca.panels.handle('repo.getContext', async () => {
-    const context = await collectRepoContext(orca)
+    const context = await collectRepoContext(orca, state)
     return publish(orca, context)
   })
 
   orca.panels.handle('repo.chooseWorkspace', async (input: { path?: string }) => {
     const path = typeof input?.path === 'string' ? input.path : null
-    if (path) {
+    if (path && existsSync(path)) {
       try {
         const context = await orca.host.call('workspace.readContext')
         const branch = context?.branch ? context.branch.replace(/^refs\/heads\//, '') : null
-        // Only persist picks for workspaces this machine can actually use.
-        if (existsSync(path)) {
-          const key = choiceKey(branch, context?.displayName ?? null)
-          memoryChoices.set(key, path)
-          const stored = await orca.storage.get(CHOICES_KEY)
-          const prefs = { ...((stored?.value ?? null) as Record<string, string> | null) }
-          prefs[key] = path
-          await orca.storage.set(CHOICES_KEY, prefs)
-        }
-      } catch {
-        // preference save is best-effort; fall through to a plain refresh
+        const key = choiceKey(branch, context?.displayName ?? null)
+        state.sessionChoices.set(key, path)
+        await updateStoredChoices(orca, (choices) => {
+          choices.set(key, path)
+          return true
+        })
+      } catch (err: any) {
+        console.error('git-issues: could not persist workspace pick:', err?.message || String(err))
       }
     }
-    const fresh = await collectRepoContext(orca)
+    const fresh = await collectRepoContext(orca, state)
     return publish(orca, fresh)
   })
 
   // Whenever focused workspace or terminals change in Orca, refresh
   orca.events.on('workspace.changed', async () => {
     try {
-      const context = await collectRepoContext(orca)
+      const context = await collectRepoContext(orca, state)
       await publish(orca, context)
     } catch {
       // ignore background refresh errors

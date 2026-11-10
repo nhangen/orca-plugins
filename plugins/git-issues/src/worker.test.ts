@@ -1,4 +1,4 @@
-import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker'
 import { parseGitRemote, parseGitBranches } from './worker'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -172,6 +172,63 @@ test('worker excludes non-local candidates and ignores invalid chooseWorkspace i
     assert.ok(!rejected.ambiguous)
     assert.deepEqual(host.data().storage.workspaceChoices ?? undefined, undefined)
     await worker.deactivate()
+  }
+))
+
+test('a pick keeps the picks stored for other branch and name keys', withTempWorkspaces(
+  ['wb-alice', 'wb-bob', 'wb-dev'],
+  async ([alice, bob, dev]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      storage: { workspaceChoices: { 'develop|develop': dev } },
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    await worker.request('repo.chooseWorkspace', { path: bob })
+    assert.deepEqual(host.data().storage.workspaceChoices, { 'develop|develop': dev, 'main|main': bob })
+    await worker.deactivate()
+  }
+))
+
+test('a pick still applies for the session when storage refuses the write', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      storage: { workspaceChoices: { 'main|main': alice } },
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false },
+        'storage.set': () => {
+          throw hostError('action_failed', 'disk full')
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const chosen = (await worker.request('repo.chooseWorkspace', { path: bob })) as any
+    assert.equal(chosen.workspacePath, bob)
+    const again = (await worker.request('repo.getContext')) as any
+    assert.equal(again.workspacePath, bob)
+    await worker.deactivate()
+  }
+))
+
+test('a pick made in one worker does not leak into a freshly mounted one', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const first = await mountWorker(main, { host: baseHost([entry(alice), entry(bob)]) as any })
+    await first.request('repo.chooseWorkspace', { path: bob })
+    await first.deactivate()
+    const second = await mountWorker(main, { host: baseHost([entry(alice), entry(bob)]) as any })
+    const context = (await second.request('repo.getContext')) as any
+    assert.equal(context.workspacePath, alice)
+    await second.deactivate()
   }
 ))
 
