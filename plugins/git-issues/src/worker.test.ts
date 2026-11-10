@@ -1,7 +1,7 @@
 import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker'
 import { parseGitRemote, parseGitBranches } from './worker'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -72,34 +72,29 @@ test('worker registers repo.getContext handler and answers requests', async () =
   await worker.deactivate()
 })
 
-test('worker picks the folder workspace when its branch is null and a sibling worktree is listed first', async () => {
-  const folderPath = '/Users/nhangen/code/my-project'
-  const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read'],
-    results: {
-      'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
-      'workspace.list': {
-        workspaces: [
-          {
-            id: 'w0',
-            kind: 'worktree',
-            name: 'draft',
-            path: '/Users/nhangen/code/my-project.wt',
-            branch: 'refs/heads/draft',
-            hostId: null
-          },
-          { id: 'w1', kind: 'folder', name: 'my-project', path: folderPath, branch: null, hostId: null }
-        ],
-        truncated: false
+test('worker picks the folder workspace when its branch is null and a sibling worktree is listed first', withTempWorkspaces(
+  ['my-project.wt', 'my-project'],
+  async ([worktreePath, folderPath]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'draft', path: worktreePath, branch: 'refs/heads/draft', hostId: null },
+            { id: 'w1', kind: 'folder', name: 'my-project', path: folderPath, branch: null, hostId: null }
+          ],
+          truncated: false
+        }
       }
-    }
-  })
-  const worker = await mountWorker(main, { host })
-  const result = (await worker.request('repo.getContext')) as any
-  assert.equal(result.workspacePath, folderPath)
-  assert.ok(!result.ambiguous)
-  await worker.deactivate()
-})
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, folderPath)
+    assert.ok(!result.ambiguous)
+    await worker.deactivate()
+  }
+))
 
 test('worker reports ambiguous candidates and persists a pick when several workspaces share the focused branch', withTempWorkspaces(
   ['wb-alice', 'wb-bob'],
@@ -232,23 +227,118 @@ test('a pick made in one worker does not leak into a freshly mounted one', withT
   }
 ))
 
-test('worker prefers a worktree whose branch matches the focused branch', async () => {
-  const worktreePath = '/Users/nhangen/code/my-project.wt'
-  const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read'],
-    results: {
-      'workspace.readContext': { branch: 'draft', displayName: 'draft', terminals: [] },
-      'workspace.list': {
-        workspaces: [
-          { id: 'w1', kind: 'folder', name: 'my-project', path: '/Users/nhangen/code/my-project', branch: null, hostId: null },
-          { id: 'w0', kind: 'worktree', name: 'draft', path: worktreePath, branch: 'refs/heads/draft', hostId: null }
-        ],
-        truncated: false
+test('worker prefers a worktree whose branch matches the focused branch', withTempWorkspaces(
+  ['my-project', 'my-project.wt'],
+  async ([folderPath, worktreePath]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'draft', displayName: 'draft', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w1', kind: 'folder', name: 'my-project', path: folderPath, branch: null, hostId: null },
+            { id: 'w0', kind: 'worktree', name: 'draft', path: worktreePath, branch: 'refs/heads/draft', hostId: null }
+          ],
+          truncated: false
+        }
       }
-    }
-  })
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, worktreePath)
+    await worker.deactivate()
+  }
+))
+
+test('a renamed workspace on a shared branch resolves to itself without a picker', withTempWorkspaces(
+  ['wb-ceo', 'wb-tools'],
+  async ([ceo, tools]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'ceo', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', path: tools, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'worktree', name: 'ceo', path: ceo, branch: 'main', hostId: null }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, ceo)
+    assert.ok(!result.ambiguous)
+    await worker.deactivate()
+  }
+))
+
+test('a remote workspace whose path also exists locally is not a candidate', withTempWorkspaces(
+  ['wb-local', 'wb-mirrored'],
+  async ([local, mirrored]) => {
+    const host = baseHost([
+      { id: 'w0', kind: 'worktree', name: 'main', path: mirrored, branch: 'main', hostId: 'ssh-buildbox' },
+      { id: 'w1', kind: 'worktree', name: 'main', path: local, branch: 'main', hostId: 'local' }
+    ]) as any
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, local)
+    assert.ok(!result.ambiguous)
+    await worker.deactivate()
+  }
+))
+
+test('remote-only matches never become the repo the worker runs git in', async () => {
+  const host = baseHost([
+    { id: 'w0', kind: 'worktree', name: 'main', path: '/remote/a', branch: 'main', hostId: 'ssh-buildbox' },
+    { id: 'w1', kind: 'worktree', name: 'main', path: '/remote/b', branch: 'main', hostId: 'ssh-buildbox' }
+  ]) as any
   const worker = await mountWorker(main, { host })
   const result = (await worker.request('repo.getContext')) as any
-  assert.equal(result.workspacePath, worktreePath)
+  assert.equal(result.workspacePath, process.cwd())
+  assert.ok(!result.ambiguous)
+  assert.equal(result.candidates, undefined)
   await worker.deactivate()
+})
+
+test('no workspace matching the focused branch or name is flagged rather than guessed', withTempWorkspaces(
+  ['wb-one', 'wb-two'],
+  async ([one, two]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'release', displayName: 'release', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', path: one, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'worktree', name: 'dev', path: two, branch: 'dev', hostId: null }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.ok(result.ambiguous)
+    assert.deepEqual(result.candidates.map((c: any) => c.path), [one, two])
+    await worker.deactivate()
+  }
+))
+
+test('candidates that share a folder name are labelled with their parent folder', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wb-labels-'))
+  const a = join(root, 'code', 'foo')
+  const b = join(root, 'work', 'foo')
+  mkdirSync(a, { recursive: true })
+  mkdirSync(b, { recursive: true })
+  try {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const worker = await mountWorker(main, { host: baseHost([entry(a), entry(b)]) as any })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.deepEqual(result.candidates.map((c: any) => c.name), ['code/foo', 'work/foo'])
+    await worker.deactivate()
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

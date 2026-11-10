@@ -278,16 +278,83 @@ export async function fetchPullRequests(
   return { pullRequests: [] }
 }
 
-interface WorkspaceEntry {
+export interface WorkspaceEntry {
   id?: string
   kind?: 'worktree' | 'folder'
   name?: string
   path: string
   branch?: string | null
+  hostId?: string | null
+}
+
+export interface FocusedContext {
+  branch?: string | null
+  displayName?: string | null
+}
+
+export interface WorkspaceResolution {
+  workspacePath: string | null
+  activeBranch: string | null
+  key: string
+  ambiguous: boolean
+  candidates: RepoCandidate[]
+}
+
+export function stripRef(branch: string): string {
+  return branch.replace(/^refs\/heads\//, '')
 }
 
 function choiceKey(branch: string | null, displayName: string | null): string {
   return `${branch ?? '-'}|${displayName ?? '-'}`
+}
+
+/** Orca reports this machine as hostId null (unresolved) or 'local'; every other id is a remote host. */
+function isLocalWorkspace(w: WorkspaceEntry): boolean {
+  return (w.hostId == null || w.hostId === 'local') && existsSync(w.path)
+}
+
+function candidateLabels(paths: string[]): string[] {
+  const segments = paths.map((p) => p.split('/').filter(Boolean))
+  const base = segments.map((s) => s[s.length - 1] ?? '')
+  return segments.map((s, i) => {
+    const collides = base.filter((b) => b === base[i]).length > 1
+    return (collides ? s.slice(-2).join('/') : base[i]) || paths[i]
+  })
+}
+
+export function resolveWorkspace(
+  context: FocusedContext | null,
+  workspaces: WorkspaceEntry[],
+  choices: Map<string, string>
+): WorkspaceResolution {
+  const activeBranch = context?.branch ? stripRef(context.branch) : null
+  const displayName = context?.displayName ?? null
+  const key = choiceKey(activeBranch, displayName)
+  const pool = workspaces.filter((w) => Boolean(w.path) && isLocalWorkspace(w))
+  if (pool.length === 0) {
+    return { workspacePath: null, activeBranch, key, ambiguous: false, candidates: [] }
+  }
+
+  const onBranch = activeBranch != null ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch) : []
+  const named = displayName != null ? pool.filter((w) => w.name === displayName) : []
+  const both = onBranch.filter((w) => named.includes(w))
+  const matched = both.length > 0 ? both : onBranch.length > 0 ? onBranch : named
+  const matches = matched.length > 0 ? matched : pool
+
+  if (matches.length === 1) {
+    return { workspacePath: matches[0].path, activeBranch, key, ambiguous: false, candidates: [] }
+  }
+
+  const fallback = matched.length > 0 ? matches[0] : (matches.find((w) => w.kind === 'folder') ?? matches[0])
+  const preferred = choices.get(key)
+  const labels = candidateLabels(matches.map((w) => w.path))
+  return {
+    workspacePath: matches.find((w) => w.path === preferred)?.path ?? fallback.path,
+    activeBranch,
+    key,
+    ambiguous: true,
+    candidates: matches.map((w, i) => ({ path: w.path, name: labels[i] }))
+  }
 }
 
 export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState = createWorkerState()): Promise<RepoContext> {
@@ -298,45 +365,19 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
 
   try {
     const context = await orca.host.call('workspace.readContext')
-    if (context?.branch) {
-      activeBranch = context.branch.replace(/^refs\/heads\//, '')
-    }
-
+    if (context?.branch) activeBranch = stripRef(context.branch)
     const list = await orca.host.call('workspace.list')
-    if (list?.workspaces && list.workspaces.length > 0) {
-      const stripRef = (b: string) => b.replace(/^refs\/heads\//, '')
-      const all = (list.workspaces as WorkspaceEntry[]).filter((w) => Boolean(w.path))
-      // workspace.list spans every host Orca reaches; remote entries' paths do not exist here.
-      const workspaces = all.filter((w) => existsSync(w.path))
-      const pool = workspaces.length > 0 ? workspaces : all
-      const branchMatches =
-        activeBranch != null
-          ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch)
-          : []
-      const nameMatches = pool.filter(
-        (w) => context?.displayName != null && w.name === context.displayName
-      )
-      const matches = branchMatches.length > 0 ? branchMatches : nameMatches
-      if (matches.length > 0) {
-        const candidates = matches.map((w) => ({ path: w.path, name: w.path.split('/').filter(Boolean).pop() ?? w.path }))
-        if (matches.length > 1) {
-          ambiguous = true
-          await pruneChoices(orca, state)
-          const choices = await readChoices(orca, state)
-          const preferred = context ? choices.get(choiceKey(activeBranch, context.displayName ?? null)) : undefined
-          workspacePath = matches.find((w) => w.path === preferred)?.path ?? matches[0].path
-        } else {
-          workspacePath = matches[0].path
-        }
-        if (ambiguous) {
-          contextCandidates = candidates
-        }
-      } else {
-        workspacePath = pool.find((w) => w.kind === 'folder')?.path ?? pool[0].path
-      }
+    const workspaces = (list?.workspaces ?? []) as WorkspaceEntry[]
+    let resolution = resolveWorkspace(context, workspaces, state.sessionChoices)
+    if (resolution.ambiguous) {
+      await pruneChoices(orca, state)
+      resolution = resolveWorkspace(context, workspaces, await readChoices(orca, state))
+      contextCandidates = resolution.candidates
     }
-  } catch {
-    // If workspace calls fail (e.g. testing or permission), fallback
+    workspacePath = resolution.workspacePath
+    ambiguous = resolution.ambiguous
+  } catch (err: any) {
+    console.error('git-issues: could not resolve the focused workspace:', err?.message || String(err))
   }
 
   if (!workspacePath) {
@@ -432,7 +473,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (path && existsSync(path)) {
       try {
         const context = await orca.host.call('workspace.readContext')
-        const branch = context?.branch ? context.branch.replace(/^refs\/heads\//, '') : null
+        const branch = context?.branch ? stripRef(context.branch) : null
         const key = choiceKey(branch, context?.displayName ?? null)
         state.sessionChoices.set(key, path)
         await updateStoredChoices(orca, (choices) => {
