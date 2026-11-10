@@ -1,6 +1,6 @@
-# Git Issues & Branches
+# Git Issues, PRs & Branches
 
-An Orca sidebar plugin that displays GitHub issues and git branches for the currently active repository.
+An Orca sidebar plugin that displays GitHub issues, pull requests, and git branches for the currently active repository.
 
 ## Features
 
@@ -10,6 +10,11 @@ An Orca sidebar plugin that displays GitHub issues and git branches for the curr
   - Filters by issue state (`Open`, `Closed`, `All`) and real-time text search (by title, `#number`, or author).
   - Shows labels, state badges, author, and relative updated time.
   - Clicking any issue opens its web page in the default browser.
+- **Pull Requests Tab**:
+  - Displays pull requests with dedicated status filters: `Open`, `Draft`, `Merged`, `Closed`, and `All`.
+  - Distinguishes draft PRs with clear badges.
+  - Displays head and target branches (`branch → main`), author, and relative updated timestamps.
+  - Clicking any pull request opens it in the default browser.
 - **Git Branches Tab**:
   - Shows all local branches, with the currently checked-out branch marked with an active `HEAD` badge.
   - Shows upstream tracking branches and latest commit subjects with commit dates.

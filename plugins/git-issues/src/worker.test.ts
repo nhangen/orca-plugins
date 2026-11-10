@@ -42,6 +42,7 @@ test('worker registers repo.getContext handler and answers requests', async () =
   assert.ok(result)
   assert.ok(Array.isArray(result.branches))
   assert.ok(Array.isArray(result.issues))
+  assert.ok(Array.isArray(result.pullRequests))
   assert.deepEqual(worker.refusals, [])
   await worker.deactivate()
 })

@@ -2,7 +2,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { GitBranch, GitIssue, RepoContext } from './protocol'
+import type { GitBranch, GitIssue, GitPullRequest, RepoContext } from './protocol'
 
 const exec = promisify(execFile)
 const STORAGE_KEY = 'latestContext'
@@ -125,6 +125,98 @@ export async function fetchGitHubIssues(repoSlug: string, cwd: string): Promise<
   return { issues: [] }
 }
 
+export async function fetchPullRequests(
+  repoSlug: string,
+  cwd: string
+): Promise<{ pullRequests: GitPullRequest[]; error?: string }> {
+  // Option A: Try GitHub CLI first (uses local existing user session)
+  try {
+    const { stdout } = await exec(
+      'gh',
+      [
+        'pr',
+        'list',
+        '--repo',
+        repoSlug,
+        '--state',
+        'all',
+        '--limit',
+        '50',
+        '--json',
+        'number,title,state,isDraft,url,author,updatedAt,headRefName,baseRefName,labels,mergedAt'
+      ],
+      { cwd, env: EXEC_ENV, timeout: 10000 }
+    )
+    const raw = JSON.parse(stdout)
+    if (Array.isArray(raw)) {
+      const pullRequests: GitPullRequest[] = raw.map((item: any) => ({
+        number: Number(item.number),
+        title: String(item.title ?? ''),
+        state: String(item.state).toUpperCase() === 'MERGED' ? 'MERGED' : String(item.state).toUpperCase() === 'CLOSED' ? 'CLOSED' : 'OPEN',
+        isDraft: Boolean(item.isDraft),
+        url: String(item.url ?? `https://github.com/${repoSlug}/pull/${item.number}`),
+        author: item.author?.login || item.author?.name || undefined,
+        updatedAt: String(item.updatedAt ?? ''),
+        updatedAtMs: item.updatedAt ? new Date(item.updatedAt).getTime() : undefined,
+        mergedAt: item.mergedAt ? String(item.mergedAt) : undefined,
+        headRefName: item.headRefName ? String(item.headRefName) : undefined,
+        baseRefName: item.baseRefName ? String(item.baseRefName) : undefined,
+        labels: Array.isArray(item.labels)
+          ? item.labels.map((l: any) => ({ name: String(l.name), color: l.color ? String(l.color) : undefined }))
+          : []
+      }))
+      return { pullRequests }
+    }
+  } catch (ghErr: any) {
+    console.error('GH PR CLI ERROR:', ghErr?.message || String(ghErr), ghErr?.stderr)
+  }
+
+  // Option B: Public GitHub REST API fallback
+  try {
+    const response = await fetch(`https://api.github.com/repos/${repoSlug}/pulls?state=all&per_page=50`, {
+      headers: {
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'Orca-Git-Issues-Plugin'
+      }
+    })
+
+    if (!response.ok) {
+      return {
+        pullRequests: [],
+        error: `GitHub API error: HTTP ${response.status} ${response.statusText}`
+      }
+    }
+
+    const raw = await response.json()
+    if (Array.isArray(raw)) {
+      const pullRequests: GitPullRequest[] = raw.map((item: any) => ({
+        number: Number(item.number),
+        title: String(item.title ?? ''),
+        state: item.merged_at ? 'MERGED' : String(item.state).toUpperCase() === 'CLOSED' ? 'CLOSED' : 'OPEN',
+        isDraft: Boolean(item.draft),
+        url: String(item.html_url ?? `https://github.com/${repoSlug}/pull/${item.number}`),
+        author: item.user?.login || undefined,
+        updatedAt: String(item.updated_at ?? ''),
+        updatedAtMs: item.updated_at ? new Date(item.updated_at).getTime() : undefined,
+        mergedAt: item.merged_at ? String(item.merged_at) : undefined,
+        headRefName: item.head?.ref ? String(item.head.ref) : undefined,
+        baseRefName: item.base?.ref ? String(item.base.ref) : undefined,
+        labels: Array.isArray(item.labels)
+          ? item.labels.map((l: any) => ({ name: String(l.name), color: l.color ? String(l.color) : undefined }))
+          : []
+      }))
+      return { pullRequests }
+    }
+  } catch (apiErr: any) {
+    return {
+      pullRequests: [],
+      error: `Failed to fetch PRs: ${apiErr?.message || String(apiErr)}`
+    }
+  }
+
+  return { pullRequests: [] }
+}
+
 export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoContext> {
   let workspacePath: string | null = null
   let activeBranch: string | null = null
@@ -180,16 +272,22 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
   }
 
   let issues: GitIssue[] = []
+  let pullRequests: GitPullRequest[] = []
   let issuesError: string | null = null
+  let prsError: string | null = null
 
   if (repoSlug) {
-    const issuesResult = await fetchGitHubIssues(repoSlug, workspacePath)
+    const [issuesResult, prsResult] = await Promise.all([
+      fetchGitHubIssues(repoSlug, workspacePath),
+      fetchPullRequests(repoSlug, workspacePath)
+    ])
     issues = issuesResult.issues
-    if (issuesResult.error) {
-      issuesError = issuesResult.error
-    }
+    if (issuesResult.error) issuesError = issuesResult.error
+    pullRequests = prsResult.pullRequests
+    if (prsResult.error) prsError = prsResult.error
   } else {
     issuesError = 'No GitHub remote origin found for this workspace'
+    prsError = 'No GitHub remote origin found for this workspace'
   }
 
   const result: RepoContext = {
@@ -197,8 +295,10 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
     currentBranch,
     workspacePath,
     issues,
+    pullRequests,
     branches,
     issuesError,
+    prsError,
     branchesError,
     fetchedAt: Date.now()
   }

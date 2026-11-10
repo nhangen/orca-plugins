@@ -13,6 +13,21 @@ export interface GitIssue {
   commentsCount?: number
 }
 
+export interface GitPullRequest {
+  number: number
+  title: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  isDraft: boolean
+  url: string
+  author?: string
+  updatedAt: string
+  updatedAtMs?: number
+  mergedAt?: string
+  headRefName?: string
+  baseRefName?: string
+  labels: { name: string; color?: string }[]
+}
+
 export interface GitBranch {
   name: string
   isHead: boolean
@@ -26,8 +41,10 @@ export interface RepoContext {
   currentBranch: string | null
   workspacePath: string | null
   issues: GitIssue[]
+  pullRequests: GitPullRequest[]
   branches: GitBranch[]
   issuesError?: string | null
+  prsError?: string | null
   branchesError?: string | null
   fetchedAt: number
 }

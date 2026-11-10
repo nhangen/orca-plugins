@@ -24,7 +24,7 @@ import {
   Text,
   type PanelContext
 } from 'orca'
-import type { GitBranch, GitIssue, RepoContext } from './protocol'
+import type { GitBranch, GitIssue, GitPullRequest, RepoContext } from './protocol'
 
 // Atoms for state management
 export const repoContext = atom<RepoContext | null>(null)
@@ -32,6 +32,8 @@ export const loading = atom<boolean>(true)
 export const activeTab = atom<string>('activeTab', 'issues', { persist: 'plugin' })
 export const issueFilter = atom<string>('issueFilter', 'open', { persist: 'plugin' })
 export const issueSearch = atom<string>('')
+export const prFilter = atom<string>('prFilter', 'open', { persist: 'plugin' })
+export const prSearch = atom<string>('')
 export const branchSearch = atom<string>('')
 
 export async function refresh(force = true): Promise<void> {
@@ -61,14 +63,22 @@ export default function Panel() {
   const isLoading = read(loading)
   const currentTab = read(activeTab)
   const currentIssueFilter = read(issueFilter)
+  const currentPrFilter = read(prFilter)
   const issueQuery = read(issueSearch).toLowerCase().trim()
+  const prQuery = read(prSearch).toLowerCase().trim()
   const branchQuery = read(branchSearch).toLowerCase().trim()
 
   const allIssues: GitIssue[] = data?.issues ?? []
+  const allPRs: GitPullRequest[] = data?.pullRequests ?? []
   const allBranches: GitBranch[] = data?.branches ?? []
 
   const openCount = allIssues.filter((i) => i.state === 'OPEN').length
   const closedCount = allIssues.filter((i) => i.state === 'CLOSED').length
+
+  const openPRCount = allPRs.filter((p) => p.state === 'OPEN' && !p.isDraft).length
+  const draftPRCount = allPRs.filter((p) => p.isDraft).length
+  const mergedPRCount = allPRs.filter((p) => p.state === 'MERGED').length
+  const closedPRCount = allPRs.filter((p) => p.state === 'CLOSED' && !p.isDraft).length
 
   const filteredIssues = allIssues.filter((issue) => {
     if (currentIssueFilter === 'open' && issue.state !== 'OPEN') return false
@@ -78,6 +88,21 @@ export default function Panel() {
       const matchNum = String(issue.number).includes(issueQuery)
       const matchAuthor = issue.author?.toLowerCase().includes(issueQuery) ?? false
       return matchTitle || matchNum || matchAuthor
+    }
+    return true
+  })
+
+  const filteredPRs = allPRs.filter((pr) => {
+    if (currentPrFilter === 'open' && (pr.state !== 'OPEN' || pr.isDraft)) return false
+    if (currentPrFilter === 'draft' && !pr.isDraft) return false
+    if (currentPrFilter === 'merged' && pr.state !== 'MERGED') return false
+    if (currentPrFilter === 'closed' && (pr.state !== 'CLOSED' || pr.isDraft)) return false
+    if (prQuery) {
+      const matchTitle = pr.title.toLowerCase().includes(prQuery)
+      const matchNum = String(pr.number).includes(prQuery)
+      const matchAuthor = pr.author?.toLowerCase().includes(prQuery) ?? false
+      const matchHead = pr.headRefName?.toLowerCase().includes(prQuery) ?? false
+      return matchTitle || matchNum || matchAuthor || matchHead
     }
     return true
   })
@@ -207,7 +232,116 @@ export default function Panel() {
           </Stack>
         </Tab>
 
-        <Tab value="branches" label={`Branches (${allBranches.length})`} icon="branch">
+        <Tab value="prs" label={`PRs (${openPRCount + draftPRCount})`} icon="branch">
+          <Stack gap="sm">
+            {/* PR filter buttons */}
+            <Row gap="xs" align="center" wrap>
+              <Button
+                size="xs"
+                variant={currentPrFilter === 'open' ? 'solid' : 'ghost'}
+                tone={currentPrFilter === 'open' ? 'accent' : 'neutral'}
+                onPress={() => set(prFilter, 'open')}
+              >
+                {`Open (${openPRCount})`}
+              </Button>
+              <Button
+                size="xs"
+                variant={currentPrFilter === 'draft' ? 'solid' : 'ghost'}
+                tone={currentPrFilter === 'draft' ? 'accent' : 'neutral'}
+                onPress={() => set(prFilter, 'draft')}
+              >
+                {`Draft (${draftPRCount})`}
+              </Button>
+              <Button
+                size="xs"
+                variant={currentPrFilter === 'merged' ? 'solid' : 'ghost'}
+                tone={currentPrFilter === 'merged' ? 'accent' : 'neutral'}
+                onPress={() => set(prFilter, 'merged')}
+              >
+                {`Merged (${mergedPRCount})`}
+              </Button>
+              <Button
+                size="xs"
+                variant={currentPrFilter === 'closed' ? 'solid' : 'ghost'}
+                tone={currentPrFilter === 'closed' ? 'accent' : 'neutral'}
+                onPress={() => set(prFilter, 'closed')}
+              >
+                {`Closed (${closedPRCount})`}
+              </Button>
+              <Button
+                size="xs"
+                variant={currentPrFilter === 'all' ? 'solid' : 'ghost'}
+                tone="neutral"
+                onPress={() => set(prFilter, 'all')}
+              >
+                {`All (${allPRs.length})`}
+              </Button>
+            </Row>
+
+            {/* PR Search input */}
+            <Input
+              label="Search pull requests"
+              labelHidden
+              type="search"
+              placeholder="Filter by title, #, branch, or author..."
+              value={read(prSearch)}
+              onChange={(val) => set(prSearch, val)}
+            />
+
+            {/* PR content */}
+            {isLoading && !data ? (
+              <Spinner label="Loading pull requests..." />
+            ) : data?.prsError ? (
+              <Callout tone="warning" title="Pull Requests Notice" icon="warning">
+                {data.prsError}
+              </Callout>
+            ) : filteredPRs.length === 0 ? (
+              <EmptyState
+                title="No pull requests found"
+                description={prQuery ? 'No pull requests match your filter.' : 'No pull requests found for this repository.'}
+                icon="check"
+              />
+            ) : (
+              <Box scroll="y">
+                <List label="Pull Requests">
+                  {filteredPRs.map((pr) => (
+                    <ListItem
+                      key={String(pr.number)}
+                      title={`#${pr.number} ${pr.title}`}
+                      description={
+                        pr.headRefName
+                          ? `${pr.author ? `Opened by ${pr.author} · ` : ''}${pr.headRefName} → ${pr.baseRefName ?? 'main'}`
+                          : pr.author
+                            ? `Opened by ${pr.author}`
+                            : undefined
+                      }
+                      icon={pr.state === 'MERGED' ? 'check' : pr.isDraft ? 'file-text' : pr.state === 'OPEN' ? 'branch' : 'close'}
+                      onPress={() => void shell.openExternal(pr.url)}
+                    >
+                      <Row gap="xs" align="center" wrap>
+                        <Badge tone={pr.isDraft ? 'neutral' : pr.state === 'OPEN' ? 'accent' : 'neutral'}>
+                          {pr.isDraft ? 'draft' : pr.state.toLowerCase()}
+                        </Badge>
+                        {pr.labels?.map((label) => (
+                          <Badge key={label.name} tone="neutral">
+                            {label.name}
+                          </Badge>
+                        ))}
+                        {pr.updatedAtMs ? (
+                          <Text size="xs" muted>
+                            <RelativeTime at={pr.updatedAtMs} />
+                          </Text>
+                        ) : null}
+                      </Row>
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+            )}
+          </Stack>
+        </Tab>
+
+        <Tab value="branches" label={`Branches (${allBranches.length})`} icon="code">
           <Stack gap="sm">
             {/* Branch search input */}
             <Input

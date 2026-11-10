@@ -6,17 +6,30 @@ Collection of custom plugins for the [Orca](https://github.com/stablyai/orca) ex
 
 | Plugin | Type | Description |
 | :--- | :--- | :--- |
-| [`plugins/git-issues`](plugins/git-issues) | `trusted-worker` | Sidebar panel showing GitHub issues and local git branches for the active workspace. |
+| [`plugins/git-issues`](plugins/git-issues) | `trusted-worker` | Sidebar panel showing GitHub issues, pull requests, and git branches for the active workspace. |
 
 ## Plugins Overview
 
 ### `git-issues`
 
-Displays real-time GitHub issues and local Git branches in Orca's right sidebar for whichever workspace is currently active.
+Displays real-time GitHub issues, pull requests, and local Git branches in Orca's right sidebar for whichever workspace is currently active.
 
 - **GitHub Issues**: Auto-detects the active repository's origin remote, queries issues via `gh` CLI or GitHub REST API, provides filters (Open/Closed/All) and search, and opens issue links directly in the browser.
+- **Pull Requests**: Dedicated tab for PRs with Open, Draft, Merged, Closed, and All filters, showing branch targets and review status.
 - **Git Branches**: Lists all local branches, shows active `HEAD`, upstream tracking branches, and recent commits.
 - **Auto-Syncing**: Listens for Orca's `workspace.changed` events to refresh automatically when switching workspaces.
+
+## Installation
+
+In Orca:
+1. Open **Settings → Plugins → ⋯ → Catalog sources**.
+2. Add `https://github.com/nhangen/orca-plugins.git` with ref `main`.
+3. Install **Git Issues, PRs & Branches** from the catalog list.
+
+Alternatively, install directly via CLI:
+```sh
+orca plugin install https://github.com/nhangen/orca-plugins.git#main --path plugins/git-issues
+```
 
 ## Developing Plugins
 

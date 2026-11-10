@@ -1,9 +1,16 @@
 {
   "manifestVersion": 2,
   "id": "git-issues",
-  "name": "Git Issues & Branches",
+  "name": "Git Issues, PRs & Branches",
   "version": "0.1.0",
-  "description": "Show GitHub issues and git branches for the currently loaded repository in Orca's sidebar.",
+  "description": "Show GitHub issues, pull requests, and git branches for the currently loaded repository in Orca's sidebar.",
+  "license": "MIT",
+  "repository": "https://github.com/nhangen/orca-plugins",
+  "homepage": "https://github.com/nhangen/orca-plugins",
+  "author": {
+    "name": "Nathan Hangen",
+    "url": "https://github.com/nhangen"
+  },
   "engines": {
     "orca": ">=1.4.248"
   },
@@ -14,7 +21,7 @@
     "panels": [
       {
         "id": "git-issues",
-        "title": "Git Issues & Branches",
+        "title": "Git Issues, PRs & Branches",
         "icon": "branch",
         "entry": "src/panel.tsx",
         "ui": "components"

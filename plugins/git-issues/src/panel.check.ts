@@ -29,6 +29,21 @@ const mockContext: RepoContext = {
       labels: [{ name: 'feature' }]
     }
   ],
+  pullRequests: [
+    {
+      number: 12,
+      title: 'Add pull request view to sidebar',
+      state: 'OPEN',
+      isDraft: false,
+      url: 'https://github.com/nhangen/llm-tools/pull/12',
+      author: 'nhangen',
+      updatedAt: new Date().toISOString(),
+      updatedAtMs: Date.now() - 1800000,
+      headRefName: 'feat/pr-tab',
+      baseRefName: 'main',
+      labels: [{ name: 'enhancement' }]
+    }
+  ],
   branches: [
     {
       name: 'main',

@@ -29,6 +29,34 @@ const sampleContext: RepoContext = {
       labels: []
     }
   ],
+  pullRequests: [
+    {
+      number: 10,
+      title: 'Add PR support to sidebar',
+      state: 'OPEN',
+      isDraft: false,
+      url: 'https://github.com/test-owner/test-repo/pull/10',
+      author: 'carol',
+      updatedAt: '2026-11-10T00:00:00Z',
+      updatedAtMs: 1700000000000,
+      headRefName: 'feat/prs',
+      baseRefName: 'main',
+      labels: []
+    },
+    {
+      number: 9,
+      title: 'Draft PR for testing',
+      state: 'OPEN',
+      isDraft: true,
+      url: 'https://github.com/test-owner/test-repo/pull/9',
+      author: 'dave',
+      updatedAt: '2026-11-09T00:00:00Z',
+      updatedAtMs: 1699900000000,
+      headRefName: 'draft/test',
+      baseRefName: 'main',
+      labels: []
+    }
+  ],
   branches: [
     {
       name: 'feature/orca-sidebar',
@@ -67,6 +95,16 @@ test('renders repo context and switches tabs', async () => {
   await view.press({ text: 'Closed (1)' })
   await view.settled()
   assert.ok(view.find({ label: '#41 Fix branch ordering' }))
+
+  // Switch tab to PRs
+  await view.select({ role: 'tablist' }, 'prs')
+  await view.settled()
+  assert.ok(view.find({ label: '#10 Add PR support to sidebar' }))
+
+  // Switch PR filter to draft
+  await view.press({ text: 'Draft (1)' })
+  await view.settled()
+  assert.ok(view.find({ label: '#9 Draft PR for testing' }))
 
   // Switch tab to Branches
   await view.select({ role: 'tablist' }, 'branches')
