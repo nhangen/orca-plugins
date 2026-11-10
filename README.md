@@ -1,6 +1,6 @@
 # orca-plugins
 
-Collection of custom plugins for the [Orca](https://github.com/stablyai/orca) extensible editor environment.
+Collection of custom plugins for the [Orca](https://github.com/stablyai/orca) extensible editor environment. Listed on the [Orca Plugin Directory](https://www.onorca.dev/plugins/nhangen/orca-plugins).
 
 ## Included Plugins
 
