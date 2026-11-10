@@ -51,8 +51,12 @@ export async function refresh(force = true): Promise<void> {
 export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(
     plugin.on('repo.changed', (data) => {
-      set(repoContext, data)
-      set(loading, false)
+      // workspace.changed refreshes can complete out of order; never go backwards.
+      const current = read(repoContext)
+      if (current && data.fetchedAt >= current.fetchedAt) {
+        set(repoContext, data)
+        set(loading, false)
+      }
     })
   )
   void refresh(false)

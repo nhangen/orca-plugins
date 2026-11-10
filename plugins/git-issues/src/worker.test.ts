@@ -1,6 +1,31 @@
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker'
 import { parseGitRemote, parseGitBranches } from './worker'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+/** Real directories, because the worker filters candidates by path existence. */
+function withTempWorkspaces(names: string[], run: (paths: string[]) => Promise<void>): () => Promise<void> {
+  return async () => {
+    const paths = names.map((name) => mkdtempSync(join(tmpdir(), `${name}-`)))
+    try {
+      await run(paths)
+    } finally {
+      paths.forEach((p) => rmSync(p, { recursive: true, force: true }))
+    }
+  }
+}
+
+const baseHost = (workspaces: unknown[], options: Record<string, unknown> = {}): Object =>
+  mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    results: {
+      'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+      'workspace.list': { workspaces, truncated: false },
+      ...options
+    }
+  })
 
 test('parseGitRemote parses SSH and HTTPS GitHub urls', () => {
   assert.equal(parseGitRemote('git@github.com:owner/repo.git'), 'owner/repo')
@@ -72,56 +97,83 @@ test('worker picks the folder workspace when its branch is null and a sibling wo
   const worker = await mountWorker(main, { host })
   const result = (await worker.request('repo.getContext')) as any
   assert.equal(result.workspacePath, folderPath)
+  assert.ok(!result.ambiguous)
   await worker.deactivate()
 })
 
-test('worker reports ambiguous candidates when several workspaces share the focused branch', async () => {
-  const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read'],
-    results: {
-      'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
-      'workspace.list': {
-        workspaces: [
-          { id: 'a', kind: 'worktree', name: 'main', path: '/code/alice', branch: 'main', hostId: null },
-          { id: 'b', kind: 'worktree', name: 'main', path: '/code/bob', branch: 'main', hostId: null }
-        ],
-        truncated: false
-      }
-    }
-  })
-  const worker = await mountWorker(main, { host })
-  const context = (await worker.request('repo.getContext')) as any
-  assert.ok(context.ambiguous)
-  assert.equal(context.candidates.length, 2)
-  assert.equal(context.workspacePath, '/code/alice')
-  const chosen = (await worker.request('repo.chooseWorkspace', { path: '/code/bob' })) as any
-  assert.ok(chosen.ambiguous)
-  assert.deepEqual(host.data().storage.workspaceChoices, { 'main|main': '/code/bob' })
-  const after = (await worker.request('repo.getContext')) as any
-  assert.equal(after.workspacePath, '/code/bob')
-  await worker.deactivate()
-})
+test('worker reports ambiguous candidates and persists a pick when several workspaces share the focused branch', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = baseHost([entry(alice), entry(bob)]) as any
+    const worker = await mountWorker(main, { host })
+    const context = (await worker.request('repo.getContext')) as any
+    assert.ok(context.ambiguous)
+    assert.equal(context.candidates.length, 2)
+    assert.equal(context.workspacePath, alice)
+    const chosen = (await worker.request('repo.chooseWorkspace', { path: bob })) as any
+    assert.ok(chosen.ambiguous)
+    assert.deepEqual(host.data().storage.workspaceChoices, { 'main|main': bob })
+    assert.equal(chosen.workspacePath, bob)
+    await worker.deactivate()
+  }
+))
 
-test('worker honors a stored workspace pick on a fresh worker', async () => {
-  const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read'],
-    storage: { workspaceChoices: { 'main|main': '/code/bob' } },
-    results: {
-      'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
-      'workspace.list': {
-        workspaces: [
-          { id: 'a', kind: 'worktree', name: 'main', path: '/code/alice', branch: 'main', hostId: null },
-          { id: 'b', kind: 'worktree', name: 'main', path: '/code/bob', branch: 'main', hostId: null }
-        ],
-        truncated: false
+test('worker honors a stored workspace pick on a fresh worker', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      storage: { workspaceChoices: { 'main|main': bob } },
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false }
       }
-    }
-  })
-  const worker = await mountWorker(main, { host })
-  const context = (await worker.request('repo.getContext')) as any
-  assert.equal(context.workspacePath, '/code/bob')
-  await worker.deactivate()
-})
+    })
+    const worker = await mountWorker(main, { host })
+    const context = (await worker.request('repo.getContext')) as any
+    assert.equal(context.workspacePath, bob)
+    await worker.deactivate()
+  }
+))
+
+test('worker falls back to the first candidate and prunes a pick whose path no longer exists', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      storage: { workspaceChoices: { 'main|main': '/gone/missing' } },
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const context = (await worker.request('repo.getContext')) as any
+    assert.ok(context.ambiguous)
+    assert.equal(context.workspacePath, alice)
+    assert.deepEqual(host.data().storage.workspaceChoices, {})
+    await worker.deactivate()
+  }
+))
+
+test('worker excludes non-local candidates and ignores invalid chooseWorkspace input', withTempWorkspaces(
+  ['wb-local'],
+  async ([local]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = baseHost([entry(local), entry('/remote-host/main')]) as any
+    const worker = await mountWorker(main, { host })
+    const context = (await worker.request('repo.getContext')) as any
+    assert.ok(!context.ambiguous)
+    assert.equal(context.workspacePath, local)
+    const rejected = (await worker.request('repo.chooseWorkspace', { path: '/gone/missing' })) as any
+    assert.ok(!rejected.ambiguous)
+    assert.deepEqual(host.data().storage.workspaceChoices ?? undefined, undefined)
+    await worker.deactivate()
+  }
+))
 
 test('worker prefers a worktree whose branch matches the focused branch', async () => {
   const worktreePath = '/Users/nhangen/code/my-project.wt'

@@ -58,7 +58,7 @@ export interface RepoContext {
   candidates?: RepoCandidate[]
 }
 
-  declare module 'orca' {
+declare module 'orca' {
   interface PluginRequests {
     /** Gets the current repository context (issues, branches, current branch, and repo slug). */
     'repo.getContext': {

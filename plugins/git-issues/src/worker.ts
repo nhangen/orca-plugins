@@ -1,5 +1,6 @@
 // The plugin's own worker running in Node.js on the Orca host.
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { JsonValue } from 'orca/host'
@@ -17,15 +18,38 @@ const AMBIGUOUS = 'ambiguous'
 /** In-memory mirror of CHOICES_KEY so a pick applies immediately, before storage is re-read. */
 const memoryChoices = new Map<string, string>()
 
-function readChoices(stored: { value?: JsonValue } | null | undefined): Map<string, string> {
-  const value = (stored?.value ?? null) as Record<string, string> | null
-  const map = new Map<string, string>(memoryChoices)
-  if (value && typeof value === 'object') {
-    for (const [key, path] of Object.entries(value)) {
+/** Storage entries alone (hydration and choose-workspace writes). */
+function parseStoredChoices(stored: unknown): Map<string, string> {
+  // Hosts return {value: JsonValue}; raw stored objects are tolerated for test ergonomics.
+  const raw = (stored as { value?: JsonValue } | null | undefined)?.value ?? stored
+  const map = new Map<string, string>()
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [key, path] of Object.entries(raw)) {
       if (typeof path === 'string') map.set(key, path)
     }
   }
   return map
+}
+
+/** Memory first (a just-made pick applies before storage confirms), storage entries after. */
+function readChoices(stored: { value?: JsonValue } | null | undefined): Map<string, string> {
+  const map = new Map<string, string>(memoryChoices)
+  for (const [key, path] of parseStoredChoices(stored)) map.set(key, path)
+  return map
+}
+
+/** Drops picks whose workspace path no longer exists on this machine, and mirrors the survivors into memory. */
+function pruneChoices(choices: Map<string, string>): boolean {
+  let changed = false
+  for (const [key, path] of choices) {
+    if (!existsSync(path)) {
+      choices.delete(key)
+      changed = true
+    }
+  }
+  memoryChoices.clear()
+  for (const [key, path] of choices) memoryChoices.set(key, path)
+  return changed
 }
 
 const EXEC_ENV = {
@@ -265,12 +289,15 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
     const list = await orca.host.call('workspace.list')
     if (list?.workspaces && list.workspaces.length > 0) {
       const stripRef = (b: string) => b.replace(/^refs\/heads\//, '')
-      const workspaces = (list.workspaces as WorkspaceEntry[]).filter((w) => Boolean(w.path))
+      const all = (list.workspaces as WorkspaceEntry[]).filter((w) => Boolean(w.path))
+      // workspace.list spans every host Orca reaches; remote entries' paths do not exist here.
+      const workspaces = all.filter((w) => existsSync(w.path))
+      const pool = workspaces.length > 0 ? workspaces : all
       const branchMatches =
         activeBranch != null
-          ? workspaces.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch)
+          ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch)
           : []
-      const nameMatches = workspaces.filter(
+      const nameMatches = pool.filter(
         (w) => context?.displayName != null && w.name === context.displayName
       )
       const matches = branchMatches.length > 0 ? branchMatches : nameMatches
@@ -279,16 +306,23 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
         if (matches.length > 1) {
           ambiguous = true
           const choices = readChoices(await orca.storage.get(CHOICES_KEY))
+          if (pruneChoices(choices)) {
+            try {
+              await orca.storage.set(CHOICES_KEY, Object.fromEntries(choices))
+            } catch {
+              // best-effort cleanup; next pass retries
+            }
+          }
           const preferred = context ? choices.get(choiceKey(activeBranch, context.displayName ?? null)) : undefined
           workspacePath = matches.find((w) => w.path === preferred)?.path ?? matches[0].path
         } else {
           workspacePath = matches[0].path
         }
-        if (ambiguous && matches.find((w) => w.path === workspacePath)) {
+        if (ambiguous) {
           contextCandidates = candidates
         }
       } else {
-        workspacePath = workspaces.find((w) => w.kind === 'folder')?.path ?? workspaces[0].path
+        workspacePath = pool.find((w) => w.kind === 'folder')?.path ?? pool[0].path
       }
     }
   } catch {
@@ -379,6 +413,16 @@ async function publish(orca: OrcaWorkerApi, context: RepoContext): Promise<RepoC
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
+  void orca.storage
+    .get(CHOICES_KEY)
+    .then((stored) => {
+      memoryChoices.clear()
+      for (const [key, path] of parseStoredChoices(stored)) memoryChoices.set(key, path)
+    })
+    .catch(() => {
+      // hydration is best-effort; collect falls back to storage reads
+    })
+
   orca.panels.handle('repo.getContext', async () => {
     const context = await collectRepoContext(orca)
     return publish(orca, context)
@@ -390,12 +434,15 @@ export default function activate(orca: OrcaWorkerApi): void {
       try {
         const context = await orca.host.call('workspace.readContext')
         const branch = context?.branch ? context.branch.replace(/^refs\/heads\//, '') : null
-        const key = choiceKey(branch, context?.displayName ?? null)
-        memoryChoices.set(key, path)
-        const stored = await orca.storage.get(CHOICES_KEY)
-        const prefs = { ...((stored?.value ?? null) as Record<string, string> | null) }
-        prefs[key] = path
-        await orca.storage.set(CHOICES_KEY, prefs)
+        // Only persist picks for workspaces this machine can actually use.
+        if (existsSync(path)) {
+          const key = choiceKey(branch, context?.displayName ?? null)
+          memoryChoices.set(key, path)
+          const stored = await orca.storage.get(CHOICES_KEY)
+          const prefs = { ...((stored?.value ?? null) as Record<string, string> | null) }
+          prefs[key] = path
+          await orca.storage.set(CHOICES_KEY, prefs)
+        }
       } catch {
         // preference save is best-effort; fall through to a plain refresh
       }
