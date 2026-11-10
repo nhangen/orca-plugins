@@ -18,6 +18,53 @@
       },
       "releases": [
         {
+          "version": "0.1.4",
+          "commit": "7bd9af82351139bb457f6d95ab2829ee9fa69192",
+          "contentHash": "a28cf7ecfbd9545516f62f662be7b6a8f0371636a098ccaf681cd51af4aaf2af",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Git Issues, PRs & Branches",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Git Issues, PRs & Branches"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            }
+          ],
+          "capabilities": [
+            "storage:own",
+            "workspace:read"
+          ],
+          "images": {
+            "icon": {
+              "path": "plugins/git-issues/assets/icon.png",
+              "alt": "Git Issues, PRs & Branches",
+              "sha256": "94af8f3325d7353bacd1dd8627cd16ce68dc6e49942b01137e53a8db2ff7f0b6",
+              "width": 256,
+              "height": 256
+            },
+            "cover": {
+              "path": "plugins/git-issues/assets/cover.png",
+              "alt": "Git Issues, PRs & Branches for Orca",
+              "sha256": "0e1d190fc9acdf7819484020c72d59cb4c85275cc6e15894bf8277c03cf057fe",
+              "width": 1600,
+              "height": 1000
+            },
+            "screenshots": [
+              {
+                "path": "plugins/git-issues/assets/screenshot.png",
+                "alt": "Git Issues, PRs and Branches sidebar panel in Orca",
+                "sha256": "b3a91828c65edca613b21e3d9d8fd6daeecd9e96700c296ad594e0588573bb23",
+                "width": 1676,
+                "height": 1000
+              }
+            ]
+          }
+        },
+        {
           "version": "0.1.3",
           "commit": "208d7b56d1bf57375ad2d666823411c62cda65f8",
           "contentHash": "1c85af680ec928daa1f5ec6ad96f46266233e5cc09b5c37421f3337253694959",
