@@ -346,6 +346,53 @@ test('with no match the folder workspace is the default among the flagged candid
   }
 ))
 
+test('a prune that read storage before a pick does not erase the pick', withTempWorkspaces(
+  ['wb-alice', 'wb-bob', 'wb-retired'],
+  async ([alice, bob, retired]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      storage: { workspaceChoices: { 'old|old': retired } },
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    await worker.request('repo.getContext')
+    rmSync(retired, { recursive: true, force: true })
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let reached: () => void = () => {}
+    const pruneRead = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    let first = true
+    main.testHooks.afterChoicesRead = async () => {
+      if (first) {
+        first = false
+        reached()
+        await held
+      }
+    }
+    try {
+      const pruning = worker.emit('workspace.changed', { context: { branch: 'main', displayName: 'main', terminals: [] } })
+      await pruneRead
+      const picking = worker.request('repo.chooseWorkspace', { path: bob })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      release()
+      await pruning
+      await picking
+    } finally {
+      main.testHooks.afterChoicesRead = null
+    }
+    assert.deepEqual(host.data().storage.workspaceChoices, { 'main|main': bob })
+    await worker.deactivate()
+  }
+))
+
 test('a context with no local workspace reports it instead of running git elsewhere', async () => {
   const host = baseHost([
     { id: 'w0', kind: 'worktree', name: 'main', path: '/remote/a', branch: 'main', hostId: 'ssh-buildbox' }

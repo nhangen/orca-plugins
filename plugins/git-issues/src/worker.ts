@@ -18,10 +18,17 @@ export interface WorkerState {
   sessionChoices: Map<string, string>
   latestPostedRequestedAt: number
   lastRequestedAt: number
+  /** Serializes CHOICES_KEY read-modify-writes so a prune cannot overwrite a concurrent pick. */
+  choicesQueue: Promise<void>
 }
 
 export function createWorkerState(): WorkerState {
-  return { sessionChoices: new Map(), latestPostedRequestedAt: 0, lastRequestedAt: 0 }
+  return {
+    sessionChoices: new Map(),
+    latestPostedRequestedAt: 0,
+    lastRequestedAt: 0,
+    choicesQueue: Promise.resolve()
+  }
 }
 
 function parseStoredChoices(stored: JsonValue | null): Map<string, string> {
@@ -44,10 +51,18 @@ async function readChoices(orca: OrcaWorkerApi, state: WorkerState): Promise<Map
   return new Map([...stored, ...state.sessionChoices])
 }
 
-/** Re-reads storage right before writing so a concurrent pick or prune is not overwritten. */
-async function updateStoredChoices(orca: OrcaWorkerApi, mutate: (choices: Map<string, string>) => boolean): Promise<void> {
-  const choices = parseStoredChoices(await orca.storage.get(CHOICES_KEY))
-  if (mutate(choices)) await orca.storage.set(CHOICES_KEY, Object.fromEntries(choices))
+function updateStoredChoices(
+  orca: OrcaWorkerApi,
+  state: WorkerState,
+  mutate: (choices: Map<string, string>) => boolean
+): Promise<void> {
+  const run = state.choicesQueue.then(async () => {
+    const choices = parseStoredChoices(await orca.storage.get(CHOICES_KEY))
+    if (testHooks.afterChoicesRead) await testHooks.afterChoicesRead()
+    if (mutate(choices)) await orca.storage.set(CHOICES_KEY, Object.fromEntries(choices))
+  })
+  state.choicesQueue = run.catch(() => {})
+  return run
 }
 
 async function pruneChoices(orca: OrcaWorkerApi, state: WorkerState): Promise<void> {
@@ -55,7 +70,7 @@ async function pruneChoices(orca: OrcaWorkerApi, state: WorkerState): Promise<vo
     if (!existsSync(path)) state.sessionChoices.delete(key)
   }
   try {
-    await updateStoredChoices(orca, (choices) => {
+    await updateStoredChoices(orca, state, (choices) => {
       let changed = false
       for (const [key, path] of choices) {
         if (!existsSync(path)) {
@@ -465,7 +480,10 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
 }
 
 /** Inert in production; tests hold a collect at the publish window to stage an interleaving. */
-export const testHooks: { beforePublish: ((context: RepoContext) => Promise<void>) | null } = { beforePublish: null }
+export const testHooks: {
+  beforePublish: ((context: RepoContext) => Promise<void>) | null
+  afterChoicesRead: (() => Promise<void>) | null
+} = { beforePublish: null, afterChoicesRead: null }
 
 async function publish(orca: OrcaWorkerApi, state: WorkerState, context: RepoContext): Promise<RepoContext> {
   if (testHooks.beforePublish) await testHooks.beforePublish(context)
@@ -499,7 +517,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         const resolution = resolveWorkspace(context, (list?.workspaces ?? []) as WorkspaceEntry[], state.sessionChoices)
         if (resolution.ambiguous && resolution.candidates.some((c) => c.path === path)) {
           state.sessionChoices.set(resolution.key, path)
-          await updateStoredChoices(orca, (choices) => {
+          await updateStoredChoices(orca, state, (choices) => {
             choices.set(resolution.key, path)
             return true
           })
