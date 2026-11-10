@@ -17,10 +17,11 @@ export interface WorkerState {
   /** Picks made this session; they win over storage so a pick holds even when the write failed. */
   sessionChoices: Map<string, string>
   latestPostedRequestedAt: number
+  lastRequestedAt: number
 }
 
 export function createWorkerState(): WorkerState {
-  return { sessionChoices: new Map(), latestPostedRequestedAt: 0 }
+  return { sessionChoices: new Map(), latestPostedRequestedAt: 0, lastRequestedAt: 0 }
 }
 
 function parseStoredChoices(stored: JsonValue | null): Map<string, string> {
@@ -361,7 +362,8 @@ export function resolveWorkspace(
 }
 
 export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState = createWorkerState()): Promise<RepoContext> {
-  const requestedAt = Date.now()
+  const requestedAt = Math.max(Date.now(), state.lastRequestedAt + 1)
+  state.lastRequestedAt = requestedAt
   let workspacePath: string | null = null
   let activeBranch: string | null = null
   let contextCandidates: RepoCandidate[] | undefined
