@@ -217,6 +217,33 @@ test('a pick still applies for the session when storage refuses the write', with
   }
 ))
 
+test('a failed pick write does not block the writes queued after it', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const store: Record<string, any> = { workspaceChoices: { 'dev|dev': join(tmpdir(), 'wb-never-existed') } }
+    let choiceWrites = 0
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false },
+        'storage.get': ({ key }: { key: string }) => ({ value: store[key] ?? null }),
+        'storage.set': ({ key, value }: { key: string; value: any }) => {
+          if (key === 'workspaceChoices' && choiceWrites++ === 0) throw hostError('action_failed', 'disk full')
+          store[key] = value
+          return { ok: true }
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    await worker.request('repo.getContext')
+    await worker.request('repo.chooseWorkspace', { path: bob })
+    assert.equal(store.workspaceChoices['main|main'], bob)
+    await worker.deactivate()
+  }
+))
+
 test('a pick made in one worker does not leak into a freshly mounted one', withTempWorkspaces(
   ['wb-alice', 'wb-bob'],
   async ([alice, bob]) => {
