@@ -2,10 +2,31 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { GitBranch, GitIssue, GitPullRequest, RepoContext } from './protocol'
+import type { JsonValue } from 'orca/host'
+import type { GitBranch, GitIssue, GitPullRequest, RepoCandidate, RepoContext } from './protocol'
 
 const exec = promisify(execFile)
 const STORAGE_KEY = 'latestContext'
+const CHOICES_KEY = 'workspaceChoices'
+// Orca lists every root clone as a worktree named after its checked-out branch, and the focused
+// workspace API exposes only {branch, name}; separate repos on their default branch are therefore
+// indistinguishable, so the user's pick is stored per branch+name key.
+const EXACT = 'exact'
+const AMBIGUOUS = 'ambiguous'
+
+/** In-memory mirror of CHOICES_KEY so a pick applies immediately, before storage is re-read. */
+const memoryChoices = new Map<string, string>()
+
+function readChoices(stored: { value?: JsonValue } | null | undefined): Map<string, string> {
+  const value = (stored?.value ?? null) as Record<string, string> | null
+  const map = new Map<string, string>(memoryChoices)
+  if (value && typeof value === 'object') {
+    for (const [key, path] of Object.entries(value)) {
+      if (typeof path === 'string') map.set(key, path)
+    }
+  }
+  return map
+}
 
 const EXEC_ENV = {
   ...process.env,
@@ -217,9 +238,23 @@ export async function fetchPullRequests(
   return { pullRequests: [] }
 }
 
+interface WorkspaceEntry {
+  id?: string
+  kind?: 'worktree' | 'folder'
+  name?: string
+  path: string
+  branch?: string | null
+}
+
+function choiceKey(branch: string | null, displayName: string | null): string {
+  return `${branch ?? '-'}|${displayName ?? '-'}`
+}
+
 export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoContext> {
   let workspacePath: string | null = null
   let activeBranch: string | null = null
+  let contextCandidates: RepoCandidate[] | undefined
+  let ambiguous = false
 
   try {
     const context = await orca.host.call('workspace.readContext')
@@ -229,12 +264,32 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
 
     const list = await orca.host.call('workspace.list')
     if (list?.workspaces && list.workspaces.length > 0) {
-      const match = list.workspaces.find(
-        (w) =>
-          (activeBranch && w.branch && w.branch.replace(/^refs\/heads\//, '') === activeBranch) ||
-          (context?.displayName && w.name === context.displayName)
+      const stripRef = (b: string) => b.replace(/^refs\/heads\//, '')
+      const workspaces = (list.workspaces as WorkspaceEntry[]).filter((w) => Boolean(w.path))
+      const branchMatches =
+        activeBranch != null
+          ? workspaces.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch)
+          : []
+      const nameMatches = workspaces.filter(
+        (w) => context?.displayName != null && w.name === context.displayName
       )
-      workspacePath = match?.path ?? list.workspaces[0].path
+      const matches = branchMatches.length > 0 ? branchMatches : nameMatches
+      if (matches.length > 0) {
+        const candidates = matches.map((w) => ({ path: w.path, name: w.path.split('/').filter(Boolean).pop() ?? w.path }))
+        if (matches.length > 1) {
+          ambiguous = true
+          const choices = readChoices(await orca.storage.get(CHOICES_KEY))
+          const preferred = context ? choices.get(choiceKey(activeBranch, context.displayName ?? null)) : undefined
+          workspacePath = matches.find((w) => w.path === preferred)?.path ?? matches[0].path
+        } else {
+          workspacePath = matches[0].path
+        }
+        if (ambiguous && matches.find((w) => w.path === workspacePath)) {
+          contextCandidates = candidates
+        }
+      } else {
+        workspacePath = workspaces.find((w) => w.kind === 'folder')?.path ?? workspaces[0].path
+      }
     }
   } catch {
     // If workspace calls fail (e.g. testing or permission), fallback
@@ -300,36 +355,60 @@ export async function collectRepoContext(orca: OrcaWorkerApi): Promise<RepoConte
     issuesError,
     prsError,
     branchesError,
-    fetchedAt: Date.now()
+    fetchedAt: Date.now(),
+    ambiguous,
+    candidates: contextCandidates
   }
 
   return result
 }
 
+export function sanitize(context: RepoContext): RepoContext {
+  return JSON.parse(JSON.stringify(context)) as RepoContext
+}
+
+async function publish(orca: OrcaWorkerApi, context: RepoContext): Promise<RepoContext> {
+  const sanitized = sanitize(context)
+  try {
+    await orca.storage.set(STORAGE_KEY, sanitized)
+  } catch {
+    // storage cache save is non-blocking
+  }
+  orca.panels.post('repo.changed', sanitized)
+  return sanitized
+}
+
 export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('repo.getContext', async () => {
     const context = await collectRepoContext(orca)
-    const sanitized = JSON.parse(JSON.stringify(context))
-    try {
-      await orca.storage.set(STORAGE_KEY, sanitized)
-    } catch {
-      // storage cache save is non-blocking
+    return publish(orca, context)
+  })
+
+  orca.panels.handle('repo.chooseWorkspace', async (input: { path?: string }) => {
+    const path = typeof input?.path === 'string' ? input.path : null
+    if (path) {
+      try {
+        const context = await orca.host.call('workspace.readContext')
+        const branch = context?.branch ? context.branch.replace(/^refs\/heads\//, '') : null
+        const key = choiceKey(branch, context?.displayName ?? null)
+        memoryChoices.set(key, path)
+        const stored = await orca.storage.get(CHOICES_KEY)
+        const prefs = { ...((stored?.value ?? null) as Record<string, string> | null) }
+        prefs[key] = path
+        await orca.storage.set(CHOICES_KEY, prefs)
+      } catch {
+        // preference save is best-effort; fall through to a plain refresh
+      }
     }
-    orca.panels.post('repo.changed', sanitized)
-    return sanitized
+    const fresh = await collectRepoContext(orca)
+    return publish(orca, fresh)
   })
 
   // Whenever focused workspace or terminals change in Orca, refresh
   orca.events.on('workspace.changed', async () => {
     try {
       const context = await collectRepoContext(orca)
-      const sanitized = JSON.parse(JSON.stringify(context))
-      try {
-        await orca.storage.set(STORAGE_KEY, sanitized)
-      } catch {
-        // storage cache save is non-blocking
-      }
-      orca.panels.post('repo.changed', sanitized)
+      await publish(orca, context)
     } catch {
       // ignore background refresh errors
     }

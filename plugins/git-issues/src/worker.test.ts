@@ -46,3 +46,100 @@ test('worker registers repo.getContext handler and answers requests', async () =
   assert.deepEqual(worker.refusals, [])
   await worker.deactivate()
 })
+
+test('worker picks the folder workspace when its branch is null and a sibling worktree is listed first', async () => {
+  const folderPath = '/Users/nhangen/code/my-project'
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    results: {
+      'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
+      'workspace.list': {
+        workspaces: [
+          {
+            id: 'w0',
+            kind: 'worktree',
+            name: 'draft',
+            path: '/Users/nhangen/code/my-project.wt',
+            branch: 'refs/heads/draft',
+            hostId: null
+          },
+          { id: 'w1', kind: 'folder', name: 'my-project', path: folderPath, branch: null, hostId: null }
+        ],
+        truncated: false
+      }
+    }
+  })
+  const worker = await mountWorker(main, { host })
+  const result = (await worker.request('repo.getContext')) as any
+  assert.equal(result.workspacePath, folderPath)
+  await worker.deactivate()
+})
+
+test('worker reports ambiguous candidates when several workspaces share the focused branch', async () => {
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    results: {
+      'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+      'workspace.list': {
+        workspaces: [
+          { id: 'a', kind: 'worktree', name: 'main', path: '/code/alice', branch: 'main', hostId: null },
+          { id: 'b', kind: 'worktree', name: 'main', path: '/code/bob', branch: 'main', hostId: null }
+        ],
+        truncated: false
+      }
+    }
+  })
+  const worker = await mountWorker(main, { host })
+  const context = (await worker.request('repo.getContext')) as any
+  assert.ok(context.ambiguous)
+  assert.equal(context.candidates.length, 2)
+  assert.equal(context.workspacePath, '/code/alice')
+  const chosen = (await worker.request('repo.chooseWorkspace', { path: '/code/bob' })) as any
+  assert.ok(chosen.ambiguous)
+  assert.deepEqual(host.data().storage.workspaceChoices, { 'main|main': '/code/bob' })
+  const after = (await worker.request('repo.getContext')) as any
+  assert.equal(after.workspacePath, '/code/bob')
+  await worker.deactivate()
+})
+
+test('worker honors a stored workspace pick on a fresh worker', async () => {
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    storage: { workspaceChoices: { 'main|main': '/code/bob' } },
+    results: {
+      'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
+      'workspace.list': {
+        workspaces: [
+          { id: 'a', kind: 'worktree', name: 'main', path: '/code/alice', branch: 'main', hostId: null },
+          { id: 'b', kind: 'worktree', name: 'main', path: '/code/bob', branch: 'main', hostId: null }
+        ],
+        truncated: false
+      }
+    }
+  })
+  const worker = await mountWorker(main, { host })
+  const context = (await worker.request('repo.getContext')) as any
+  assert.equal(context.workspacePath, '/code/bob')
+  await worker.deactivate()
+})
+
+test('worker prefers a worktree whose branch matches the focused branch', async () => {
+  const worktreePath = '/Users/nhangen/code/my-project.wt'
+  const host = mockHost({
+    capabilities: ['storage:own', 'workspace:read'],
+    results: {
+      'workspace.readContext': { branch: 'draft', displayName: 'draft', terminals: [] },
+      'workspace.list': {
+        workspaces: [
+          { id: 'w1', kind: 'folder', name: 'my-project', path: '/Users/nhangen/code/my-project', branch: null, hostId: null },
+          { id: 'w0', kind: 'worktree', name: 'draft', path: worktreePath, branch: 'refs/heads/draft', hostId: null }
+        ],
+        truncated: false
+      }
+    }
+  })
+  const worker = await mountWorker(main, { host })
+  const result = (await worker.request('repo.getContext')) as any
+  assert.equal(result.workspacePath, worktreePath)
+  await worker.deactivate()
+})

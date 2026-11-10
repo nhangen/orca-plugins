@@ -14,6 +14,7 @@ import {
   read,
   RelativeTime,
   Row,
+  Select,
   set,
   shell,
   Spinner,
@@ -115,6 +116,21 @@ export default function Panel() {
 
   const repoTitle = data?.repoSlug ?? (data?.workspacePath ? data.workspacePath.split('/').pop() : 'Repository')
 
+  const candidates = data?.candidates ?? []
+  const ambiguous = Boolean(data?.ambiguous) && candidates.length > 1
+
+  const chooseCandidate = (path: string): void => {
+    const choose = async (): Promise<void> => {
+      try {
+        const fresh = (await plugin.request('repo.chooseWorkspace', { path })) as RepoContext
+        set(repoContext, fresh)
+      } catch {
+        // keep the previous context if the worker cannot answer
+      }
+    }
+    void choose()
+  }
+
   return (
     <Stack gap="md">
       {/* Header */}
@@ -140,6 +156,16 @@ export default function Panel() {
           disabled={isLoading}
         />
       </Row>
+
+      {/* Ambiguous workspace picker: several repos share this branch and name. */}
+      {ambiguous ? (
+        <Select
+          label={`Several workspaces are on ${data?.currentBranch ?? 'this branch'}; Orca does not expose which is focused`}
+          value={data?.workspacePath ?? undefined}
+          options={candidates.map((c) => ({ value: c.path, label: c.name }))}
+          onChange={chooseCandidate}
+        />
+      ) : null}
 
       {/* Tabs */}
       <Tabs label="Views" value={currentTab} onChange={(t) => set(activeTab, t)}>

@@ -73,7 +73,14 @@ Yes. The plugin parses standard HTTPS remotes (`https://github.com/owner/repo.gi
 - `workspace:read`: Used to read the active workspace directory path and branch name to query git status.
 - `storage:own`: Used to cache repository issues and pull requests locally to minimize network latency and API requests.
 
+### Why does the panel show the wrong repo when several main clones are on `main`?
+Orca's plugin API reports the focused workspace as `{branch, displayName}` only — no path or workspace id — and Orca names every root clone after its checked-out branch (`main`). If two or more repositories sit on their default branch, same branch and same name, the plugin cannot tell which one you focused. When that happens the panel shows a **workspace picker at the top**; choose your repo and the pick is remembered for that branch+name (kept across worker restarts). Renaming a workspace in Orca (`tab.rename` → `workspace.rename`) also disambiguates it without a picker.
+
+### What if I rename a workspace later?
+The pick is keyed by branch + workspace name, so renaming adds a new, empty key; pick again once.
+
 ## Architecture
+
 
 This plugin uses the `worker-panel` pattern:
 
