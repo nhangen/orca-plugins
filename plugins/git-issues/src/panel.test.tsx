@@ -1,4 +1,4 @@
-import { assert, mockHost, mount, test } from 'orca/testing'
+import { assert, hostError, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
 import type { RepoContext } from './protocol'
 
@@ -7,6 +7,7 @@ const sampleContext: RepoContext = {
   currentBranch: 'feature/orca-sidebar',
   workspacePath: '/mock/path/test-repo',
   fetchedAt: 1700000000000,
+  requestedAt: 1700000000000,
   issues: [
     {
       number: 42,
@@ -114,5 +115,64 @@ test('renders repo context and switches tabs', async () => {
 
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('applies pushed context even when the first request failed', async () => {
+  const host = mockHost({
+    requests: {
+      'repo.getContext': () => {
+        throw hostError('timeout', 'worker busy')
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  await view.post('repo.changed', sampleContext)
+  await view.settled()
+  assert.ok(view.find({ text: 'test-owner/test-repo' }))
+  await view.unmount()
+})
+
+test('ignores a pushed context requested before the one shown', async () => {
+  const host = mockHost({ requests: { 'repo.getContext': () => sampleContext } })
+  const view = await mount(panel, { host })
+  await view.settled()
+  const older: RepoContext = { ...sampleContext, repoSlug: 'stale/repo', requestedAt: sampleContext.requestedAt - 1000, fetchedAt: sampleContext.fetchedAt + 5000 }
+  await view.post('repo.changed', older)
+  await view.settled()
+  assert.ok(view.find({ text: 'test-owner/test-repo' }))
+  assert.equal(view.find({ text: 'stale/repo' }), null)
+  await view.unmount()
+})
+
+test('shows the workspace picker while ambiguous and applies a pick', async () => {
+  const ambiguousContext: RepoContext = {
+    ...sampleContext,
+    workspacePath: '/code/alpha',
+    ambiguous: true,
+    candidates: [
+      { path: '/code/alpha', name: 'alpha' },
+      { path: '/code/beta', name: 'beta' }
+    ]
+  }
+  const picks: string[] = []
+  const host = mockHost({
+    requests: {
+      'repo.getContext': () => ambiguousContext,
+      'repo.chooseWorkspace': (input) => {
+        picks.push(input.path)
+        return { ...ambiguousContext, workspacePath: input.path, repoSlug: 'owner/beta', requestedAt: ambiguousContext.requestedAt + 1 }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  const picker = view.find({ role: 'combobox' })
+  assert.ok(picker)
+  await view.select(picker!, '/code/beta')
+  await view.settled()
+  assert.deepEqual(picks, ['/code/beta'])
+  assert.ok(view.find({ text: 'owner/beta' }))
   await view.unmount()
 })

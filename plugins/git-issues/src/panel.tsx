@@ -36,11 +36,16 @@ export const prFilter = atom<string>('prFilter', 'open', { persist: 'plugin' })
 export const prSearch = atom<string>('')
 export const branchSearch = atom<string>('')
 
+/** A slower, earlier collect can finish last, so contexts are ordered by when they were requested. */
+function applyContext(data: RepoContext): void {
+  const current = read(repoContext)
+  if (!current || data.requestedAt >= current.requestedAt) set(repoContext, data)
+}
+
 export async function refresh(force = true): Promise<void> {
   set(loading, true)
   try {
-    const data = await plugin.request('repo.getContext', { forceRefresh: force })
-    set(repoContext, data)
+    applyContext(await plugin.request('repo.getContext', { forceRefresh: force }))
   } catch (err: any) {
     // If request fails, keep whatever state exists
   } finally {
@@ -51,12 +56,8 @@ export async function refresh(force = true): Promise<void> {
 export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(
     plugin.on('repo.changed', (data) => {
-      // workspace.changed refreshes can complete out of order; never go backwards.
-      const current = read(repoContext)
-      if (current && data.fetchedAt >= current.fetchedAt) {
-        set(repoContext, data)
-        set(loading, false)
-      }
+      applyContext(data)
+      set(loading, false)
     })
   )
   void refresh(false)
@@ -126,8 +127,7 @@ export default function Panel() {
   const chooseCandidate = (path: string): void => {
     const choose = async (): Promise<void> => {
       try {
-        const fresh = (await plugin.request('repo.chooseWorkspace', { path })) as RepoContext
-        set(repoContext, fresh)
+        applyContext(await plugin.request('repo.chooseWorkspace', { path }))
       } catch {
         // keep the previous context if the worker cannot answer
       }

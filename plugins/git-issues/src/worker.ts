@@ -16,10 +16,11 @@ const CHOICES_KEY = 'workspaceChoices'
 export interface WorkerState {
   /** Picks made this session; they win over storage so a pick holds even when the write failed. */
   sessionChoices: Map<string, string>
+  latestPostedRequestedAt: number
 }
 
 export function createWorkerState(): WorkerState {
-  return { sessionChoices: new Map() }
+  return { sessionChoices: new Map(), latestPostedRequestedAt: 0 }
 }
 
 function parseStoredChoices(stored: JsonValue | null): Map<string, string> {
@@ -358,6 +359,7 @@ export function resolveWorkspace(
 }
 
 export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState = createWorkerState()): Promise<RepoContext> {
+  const requestedAt = Date.now()
   let workspacePath: string | null = null
   let activeBranch: string | null = null
   let contextCandidates: RepoCandidate[] | undefined
@@ -441,6 +443,7 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     prsError,
     branchesError,
     fetchedAt: Date.now(),
+    requestedAt,
     ambiguous,
     candidates: contextCandidates
   }
@@ -448,7 +451,11 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
   return result
 }
 
-async function publish(orca: OrcaWorkerApi, context: RepoContext): Promise<RepoContext> {
+/** Inert in production; tests hold a collect at the publish window to stage an interleaving. */
+export const testHooks: { beforePublish: ((context: RepoContext) => Promise<void>) | null } = { beforePublish: null }
+
+async function publish(orca: OrcaWorkerApi, state: WorkerState, context: RepoContext): Promise<RepoContext> {
+  if (testHooks.beforePublish) await testHooks.beforePublish(context)
   const serialized = JSON.stringify(context)
   const sanitized: RepoContext = JSON.parse(serialized)
   try {
@@ -456,7 +463,10 @@ async function publish(orca: OrcaWorkerApi, context: RepoContext): Promise<RepoC
   } catch {
     // storage cache save is non-blocking
   }
-  orca.panels.post('repo.changed', sanitized)
+  if (context.requestedAt >= state.latestPostedRequestedAt) {
+    state.latestPostedRequestedAt = context.requestedAt
+    orca.panels.post('repo.changed', sanitized)
+  }
   return sanitized
 }
 
@@ -465,7 +475,7 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('repo.getContext', async () => {
     const context = await collectRepoContext(orca, state)
-    return publish(orca, context)
+    return publish(orca, state, context)
   })
 
   orca.panels.handle('repo.chooseWorkspace', async (input: { path?: string }) => {
@@ -487,14 +497,14 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
     const fresh = await collectRepoContext(orca, state)
-    return publish(orca, fresh)
+    return publish(orca, state, fresh)
   })
 
   // Whenever focused workspace or terminals change in Orca, refresh
   orca.events.on('workspace.changed', async () => {
     try {
       const context = await collectRepoContext(orca, state)
-      await publish(orca, context)
+      await publish(orca, state, context)
     } catch {
       // ignore background refresh errors
     }

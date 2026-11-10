@@ -7,6 +7,7 @@ const mockContext: RepoContext = {
   currentBranch: 'main',
   workspacePath: '/Users/nhangen/code/llm-tools',
   fetchedAt: Date.now(),
+  requestedAt: Date.now(),
   issues: [
     {
       number: 101,

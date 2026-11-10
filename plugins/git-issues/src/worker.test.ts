@@ -240,6 +240,56 @@ test('chooseWorkspace refuses an existing path that is not one of the current ca
   }
 ))
 
+test('a slow collect for an earlier focus is not posted after a newer one', withTempWorkspaces(
+  ['wb-a', 'wb-b'],
+  async ([a, b]) => {
+    let focus = 'a'
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read'],
+      results: {
+        'workspace.readContext': () => ({ branch: focus, displayName: focus, terminals: [] }),
+        'workspace.list': {
+          workspaces: [
+            { id: 'wa', kind: 'worktree', name: 'a', path: a, branch: 'a', hostId: null },
+            { id: 'wb', kind: 'worktree', name: 'b', path: b, branch: 'b', hostId: null }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    await worker.request('repo.getContext')
+    const before = worker.posts.length
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let reachedPublish: () => void = () => {}
+    const slowAtPublish = new Promise<void>((resolve) => {
+      reachedPublish = resolve
+    })
+    main.testHooks.beforePublish = async (context) => {
+      if (context.workspacePath === a) {
+        reachedPublish()
+        await held
+      }
+    }
+    try {
+      const slow = worker.request('repo.getContext')
+      await slowAtPublish
+      focus = 'b'
+      await worker.emit('workspace.changed', { context: { branch: 'b', displayName: 'b', terminals: [] } })
+      release()
+      await slow
+    } finally {
+      main.testHooks.beforePublish = null
+    }
+    const posted = worker.posts.slice(before).filter((p) => p.event === 'repo.changed').map((p) => (p.payload as any).workspacePath)
+    assert.deepEqual(posted, [b])
+    await worker.deactivate()
+  }
+))
+
 test('worker prefers a worktree whose branch matches the focused branch', withTempWorkspaces(
   ['my-project', 'my-project.wt'],
   async ([folderPath, worktreePath]) => {
