@@ -1,0 +1,37 @@
+{
+  "manifestVersion": 2,
+  "id": "git-issues",
+  "name": "Git Issues & Branches",
+  "version": "0.1.0",
+  "description": "Show GitHub issues and git branches for the currently loaded repository in Orca's sidebar.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "git-issues",
+        "title": "Git Issues & Branches",
+        "icon": "branch",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "events": [
+      {
+        "on": "workspace.changed"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "workspace:read"
+    }
+  ]
+}
