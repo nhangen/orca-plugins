@@ -18,6 +18,8 @@ import {
   shell,
   Spinner,
   Stack,
+  Tab,
+  Tabs,
   Text,
   type PanelContext
 } from 'orca'
@@ -139,306 +141,279 @@ export default function Panel() {
         />
       </Row>
 
-      {/* Views Navigation */}
-      <Box background="muted" radius="md" padding="xs">
-        <Row gap="xs">
-          <Button
-            size="xs"
-            variant={currentTab === 'issues' ? 'solid' : 'ghost'}
-            tone={currentTab === 'issues' ? 'accent' : 'neutral'}
-            icon="bug"
-            onPress={() => set(activeTab, 'issues')}
-          >
-            {`Issues (${openCount})`}
-          </Button>
-          <Button
-            size="xs"
-            variant={currentTab === 'prs' ? 'solid' : 'ghost'}
-            tone={currentTab === 'prs' ? 'accent' : 'neutral'}
-            icon="branch"
-            onPress={() => set(activeTab, 'prs')}
-          >
-            {`PRs (${openPRCount + draftPRCount})`}
-          </Button>
-          <Button
-            size="xs"
-            variant={currentTab === 'branches' ? 'solid' : 'ghost'}
-            tone={currentTab === 'branches' ? 'accent' : 'neutral'}
-            icon="code"
-            onPress={() => set(activeTab, 'branches')}
-          >
-            {`Branches (${allBranches.length})`}
-          </Button>
-        </Row>
-      </Box>
+      {/* Tabs */}
+      <Tabs label="Views" value={currentTab} onChange={(t) => set(activeTab, t)}>
+        <Tab value="issues" label={`Issues (${openCount})`}>
+          <Stack gap="sm">
+            {/* Filter buttons */}
+            <Row gap="xs" align="center" justify="between">
+              <Row gap="xs">
+                <Button
+                  size="xs"
+                  variant={currentIssueFilter === 'open' ? 'solid' : 'ghost'}
+                  tone="neutral"
+                  onPress={() => set(issueFilter, 'open')}
+                >
+                  {`Open (${openCount})`}
+                </Button>
+                <Button
+                  size="xs"
+                  variant={currentIssueFilter === 'closed' ? 'solid' : 'ghost'}
+                  tone="neutral"
+                  onPress={() => set(issueFilter, 'closed')}
+                >
+                  {`Closed (${closedCount})`}
+                </Button>
+                <Button
+                  size="xs"
+                  variant={currentIssueFilter === 'all' ? 'solid' : 'ghost'}
+                  tone="neutral"
+                  onPress={() => set(issueFilter, 'all')}
+                >
+                  {`All (${allIssues.length})`}
+                </Button>
+              </Row>
+            </Row>
 
-      {/* Tab Content */}
-      {currentTab === 'issues' ? (
-        <Stack gap="sm">
-          {/* Filter buttons */}
-          <Row gap="xs" align="center" justify="between">
-            <Row gap="xs">
+            {/* Issue Search input */}
+            <Input
+              label="Search issues"
+              labelHidden
+              type="search"
+              placeholder="Filter by title, #, or author..."
+              value={read(issueSearch)}
+              onChange={(val) => set(issueSearch, val)}
+            />
+
+            {/* Issue content */}
+            {isLoading && !data ? (
+              <Spinner label="Loading issues..." />
+            ) : data?.issuesError ? (
+              <Callout tone="warning" title="Issues Notice" icon="warning">
+                {data.issuesError}
+              </Callout>
+            ) : filteredIssues.length === 0 ? (
+              <EmptyState
+                title="No issues found"
+                description={issueQuery ? 'No issues match your filter.' : 'No issues found for this repository.'}
+                icon="check"
+              />
+            ) : (
+              <Box scroll="y">
+                <List label="GitHub Issues">
+                  {filteredIssues.map((issue) => (
+                    <ListItem
+                      key={String(issue.number)}
+                      icon={issue.state === 'OPEN' ? 'bug' : 'check'}
+                      onPress={() => void shell.openExternal(issue.url)}
+                    >
+                      <Text size="xs" weight="medium" truncate>
+                        {`#${issue.number} ${issue.title}`}
+                      </Text>
+                      {issue.author ? (
+                        <Text size="xs" muted truncate>
+                          {`Opened by ${issue.author}`}
+                        </Text>
+                      ) : null}
+                      <Row gap="xs" align="center" wrap>
+                        <Badge tone={issue.state === 'OPEN' ? 'accent' : 'neutral'}>
+                          {issue.state.toLowerCase()}
+                        </Badge>
+                        {issue.labels?.map((label) => (
+                          <Badge key={label.name} tone="neutral">
+                            {label.name}
+                          </Badge>
+                        ))}
+                        {issue.updatedAtMs ? (
+                          <Text size="xs" muted>
+                            <RelativeTime at={issue.updatedAtMs} />
+                          </Text>
+                        ) : null}
+                      </Row>
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+            )}
+          </Stack>
+        </Tab>
+
+        <Tab value="prs" label={`PRs (${openPRCount + draftPRCount})`}>
+          <Stack gap="sm">
+            {/* PR filter buttons */}
+            <Row gap="xs" align="center" wrap>
               <Button
                 size="xs"
-                variant={currentIssueFilter === 'open' ? 'solid' : 'ghost'}
-                tone={currentIssueFilter === 'open' ? 'accent' : 'neutral'}
-                onPress={() => set(issueFilter, 'open')}
+                variant={currentPrFilter === 'open' ? 'solid' : 'ghost'}
+                tone="neutral"
+                onPress={() => set(prFilter, 'open')}
               >
-                {`Open (${openCount})`}
+                {`Open (${openPRCount})`}
               </Button>
               <Button
                 size="xs"
-                variant={currentIssueFilter === 'closed' ? 'solid' : 'ghost'}
-                tone={currentIssueFilter === 'closed' ? 'accent' : 'neutral'}
-                onPress={() => set(issueFilter, 'closed')}
+                variant={currentPrFilter === 'draft' ? 'solid' : 'ghost'}
+                tone="neutral"
+                onPress={() => set(prFilter, 'draft')}
               >
-                {`Closed (${closedCount})`}
+                {`Draft (${draftPRCount})`}
               </Button>
               <Button
                 size="xs"
-                variant={currentIssueFilter === 'all' ? 'solid' : 'ghost'}
-                tone={currentIssueFilter === 'all' ? 'neutral' : 'neutral'}
-                onPress={() => set(issueFilter, 'all')}
+                variant={currentPrFilter === 'merged' ? 'solid' : 'ghost'}
+                tone="neutral"
+                onPress={() => set(prFilter, 'merged')}
               >
-                {`All (${allIssues.length})`}
+                {`Merged (${mergedPRCount})`}
+              </Button>
+              <Button
+                size="xs"
+                variant={currentPrFilter === 'closed' ? 'solid' : 'ghost'}
+                tone="neutral"
+                onPress={() => set(prFilter, 'closed')}
+              >
+                {`Closed (${closedPRCount})`}
+              </Button>
+              <Button
+                size="xs"
+                variant={currentPrFilter === 'all' ? 'solid' : 'ghost'}
+                tone="neutral"
+                onPress={() => set(prFilter, 'all')}
+              >
+                {`All (${allPRs.length})`}
               </Button>
             </Row>
-          </Row>
 
-          {/* Issue Search input */}
-          <Input
-            label="Search issues"
-            labelHidden
-            type="search"
-            placeholder="Filter by title, #, or author..."
-            value={read(issueSearch)}
-            onChange={(val) => set(issueSearch, val)}
-          />
-
-          {/* Issue content */}
-          {isLoading && !data ? (
-            <Spinner label="Loading issues..." />
-          ) : data?.issuesError ? (
-            <Callout tone="warning" title="Issues Notice" icon="warning">
-              {data.issuesError}
-            </Callout>
-          ) : filteredIssues.length === 0 ? (
-            <EmptyState
-              title="No issues found"
-              description={issueQuery ? 'No issues match your filter.' : 'No issues found for this repository.'}
-              icon="check"
+            {/* PR Search input */}
+            <Input
+              label="Search pull requests"
+              labelHidden
+              type="search"
+              placeholder="Filter by title, #, branch, or author..."
+              value={read(prSearch)}
+              onChange={(val) => set(prSearch, val)}
             />
-          ) : (
-            <Box scroll="y">
-              <List label="GitHub Issues">
-                {filteredIssues.map((issue) => (
-                  <ListItem
-                    key={String(issue.number)}
-                    icon={issue.state === 'OPEN' ? 'bug' : 'check'}
-                    onPress={() => void shell.openExternal(issue.url)}
-                  >
-                    <Text size="xs" weight="medium" truncate>
-                      {`#${issue.number} ${issue.title}`}
-                    </Text>
-                    {issue.author ? (
-                      <Text size="xs" muted truncate>
-                        {`Opened by ${issue.author}`}
+
+            {/* PR content */}
+            {isLoading && !data ? (
+              <Spinner label="Loading pull requests..." />
+            ) : data?.prsError ? (
+              <Callout tone="warning" title="Pull Requests Notice" icon="warning">
+                {data.prsError}
+              </Callout>
+            ) : filteredPRs.length === 0 ? (
+              <EmptyState
+                title="No pull requests found"
+                description={prQuery ? 'No pull requests match your filter.' : 'No pull requests found for this repository.'}
+                icon="check"
+              />
+            ) : (
+              <Box scroll="y">
+                <List label="Pull Requests">
+                  {filteredPRs.map((pr) => (
+                    <ListItem
+                      key={String(pr.number)}
+                      icon={pr.state === 'MERGED' ? 'check' : pr.isDraft ? 'file-text' : pr.state === 'OPEN' ? 'branch' : 'close'}
+                      onPress={() => void shell.openExternal(pr.url)}
+                    >
+                      <Text size="xs" weight="medium" truncate>
+                        {`#${pr.number} ${pr.title}`}
                       </Text>
-                    ) : null}
-                    <Row gap="xs" align="center" wrap>
-                      <Badge tone={issue.state === 'OPEN' ? 'accent' : 'neutral'}>
-                        {issue.state.toLowerCase()}
-                      </Badge>
-                      {issue.labels?.map((label) => (
-                        <Badge key={label.name} tone="neutral">
-                          {label.name}
+                      {pr.headRefName ? (
+                        <Text size="xs" muted truncate>
+                          {`${pr.author ? `Opened by ${pr.author} · ` : ''}${pr.headRefName} → ${pr.baseRefName ?? 'main'}`}
+                        </Text>
+                      ) : pr.author ? (
+                        <Text size="xs" muted truncate>
+                          {`Opened by ${pr.author}`}
+                        </Text>
+                      ) : null}
+                      <Row gap="xs" align="center" wrap>
+                        <Badge tone={pr.isDraft ? 'neutral' : pr.state === 'OPEN' ? 'accent' : 'neutral'}>
+                          {pr.isDraft ? 'draft' : pr.state.toLowerCase()}
                         </Badge>
-                      ))}
-                      {issue.updatedAtMs ? (
-                        <Text size="xs" muted>
-                          <RelativeTime at={issue.updatedAtMs} />
-                        </Text>
-                      ) : null}
-                    </Row>
-                  </ListItem>
-                ))}
-              </List>
-            </Box>
-          )}
-        </Stack>
-      ) : currentTab === 'prs' ? (
-        <Stack gap="sm">
-          {/* PR filter buttons */}
-          <Row gap="xs" align="center" wrap>
-            <Button
-              size="xs"
-              variant={currentPrFilter === 'open' ? 'solid' : 'ghost'}
-              tone={currentPrFilter === 'open' ? 'accent' : 'neutral'}
-              onPress={() => set(prFilter, 'open')}
-            >
-              {`Open (${openPRCount})`}
-            </Button>
-            <Button
-              size="xs"
-              variant={currentPrFilter === 'draft' ? 'solid' : 'ghost'}
-              tone={currentPrFilter === 'draft' ? 'accent' : 'neutral'}
-              onPress={() => set(prFilter, 'draft')}
-            >
-              {`Draft (${draftPRCount})`}
-            </Button>
-            <Button
-              size="xs"
-              variant={currentPrFilter === 'merged' ? 'solid' : 'ghost'}
-              tone={currentPrFilter === 'merged' ? 'accent' : 'neutral'}
-              onPress={() => set(prFilter, 'merged')}
-            >
-              {`Merged (${mergedPRCount})`}
-            </Button>
-            <Button
-              size="xs"
-              variant={currentPrFilter === 'closed' ? 'solid' : 'ghost'}
-              tone={currentPrFilter === 'closed' ? 'accent' : 'neutral'}
-              onPress={() => set(prFilter, 'closed')}
-            >
-              {`Closed (${closedPRCount})`}
-            </Button>
-            <Button
-              size="xs"
-              variant={currentPrFilter === 'all' ? 'solid' : 'ghost'}
-              tone="neutral"
-              onPress={() => set(prFilter, 'all')}
-            >
-              {`All (${allPRs.length})`}
-            </Button>
-          </Row>
+                        {pr.labels?.map((label) => (
+                          <Badge key={label.name} tone="neutral">
+                            {label.name}
+                          </Badge>
+                        ))}
+                        {pr.updatedAtMs ? (
+                          <Text size="xs" muted>
+                            <RelativeTime at={pr.updatedAtMs} />
+                          </Text>
+                        ) : null}
+                      </Row>
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+            )}
+          </Stack>
+        </Tab>
 
-          {/* PR Search input */}
-          <Input
-            label="Search pull requests"
-            labelHidden
-            type="search"
-            placeholder="Filter by title, #, branch, or author..."
-            value={read(prSearch)}
-            onChange={(val) => set(prSearch, val)}
-          />
-
-          {/* PR content */}
-          {isLoading && !data ? (
-            <Spinner label="Loading pull requests..." />
-          ) : data?.prsError ? (
-            <Callout tone="warning" title="Pull Requests Notice" icon="warning">
-              {data.prsError}
-            </Callout>
-          ) : filteredPRs.length === 0 ? (
-            <EmptyState
-              title="No pull requests found"
-              description={prQuery ? 'No pull requests match your filter.' : 'No pull requests found for this repository.'}
-              icon="check"
+        <Tab value="branches" label={`Branches (${allBranches.length})`}>
+          <Stack gap="sm">
+            {/* Branch search input */}
+            <Input
+              label="Search branches"
+              labelHidden
+              type="search"
+              placeholder="Filter branches..."
+              value={read(branchSearch)}
+              onChange={(val) => set(branchSearch, val)}
             />
-          ) : (
-            <Box scroll="y">
-              <List label="Pull Requests">
-                {filteredPRs.map((pr) => (
-                  <ListItem
-                    key={String(pr.number)}
-                    icon={pr.state === 'MERGED' ? 'check' : pr.isDraft ? 'file-text' : pr.state === 'OPEN' ? 'branch' : 'close'}
-                    onPress={() => void shell.openExternal(pr.url)}
-                  >
-                    <Text size="xs" weight="medium" truncate>
-                      {`#${pr.number} ${pr.title}`}
-                    </Text>
-                    {pr.headRefName ? (
-                      <Text size="xs" muted truncate>
-                        {`${pr.author ? `Opened by ${pr.author} · ` : ''}${pr.headRefName} → ${pr.baseRefName ?? 'main'}`}
-                      </Text>
-                    ) : pr.author ? (
-                      <Text size="xs" muted truncate>
-                        {`Opened by ${pr.author}`}
-                      </Text>
-                    ) : null}
-                    <Row gap="xs" align="center" wrap>
-                      <Badge tone={pr.isDraft ? 'neutral' : pr.state === 'OPEN' ? 'accent' : 'neutral'}>
-                        {pr.isDraft ? 'draft' : pr.state.toLowerCase()}
-                      </Badge>
-                      {pr.labels?.map((label) => (
-                        <Badge key={label.name} tone="neutral">
-                          {label.name}
-                        </Badge>
-                      ))}
-                      {pr.updatedAtMs ? (
-                        <Text size="xs" muted>
-                          <RelativeTime at={pr.updatedAtMs} />
-                        </Text>
-                      ) : null}
-                    </Row>
-                  </ListItem>
-                ))}
-              </List>
-            </Box>
-          )}
-        </Stack>
-      ) : (
-        <Stack gap="sm">
-          {/* Branch search input */}
-          <Input
-            label="Search branches"
-            labelHidden
-            type="search"
-            placeholder="Filter branches..."
-            value={read(branchSearch)}
-            onChange={(val) => set(branchSearch, val)}
-          />
 
-          {/* Branch content */}
-          {isLoading && !data ? (
-            <Spinner label="Loading branches..." />
-          ) : data?.branchesError ? (
-            <Callout tone="warning" title="Branches Notice" icon="warning">
-              {data.branchesError}
-            </Callout>
-          ) : filteredBranches.length === 0 ? (
-            <EmptyState
-              title="No branches found"
-              description="No git branches match your filter."
-              icon="branch"
-            />
-          ) : (
-            <Box scroll="y">
-              <List label="Git Branches">
-                {filteredBranches.map((branch) => (
-                  <ListItem
-                    key={branch.name}
-                    icon="branch"
-                    current={branch.isHead}
-                  >
-                    <Text size="xs" weight="medium" truncate>
-                      {branch.name}
-                    </Text>
-                    {branch.lastCommitSubject ? (
-                      <Text size="xs" muted truncate>
-                        {branch.lastCommitSubject}
+            {/* Branch content */}
+            {isLoading && !data ? (
+              <Spinner label="Loading branches..." />
+            ) : data?.branchesError ? (
+              <Callout tone="warning" title="Branches Notice" icon="warning">
+                {data.branchesError}
+              </Callout>
+            ) : filteredBranches.length === 0 ? (
+              <EmptyState
+                title="No branches found"
+                description="No git branches match your filter."
+                icon="branch"
+              />
+            ) : (
+              <Box scroll="y">
+                <List label="Git Branches">
+                  {filteredBranches.map((branch) => (
+                    <ListItem
+                      key={branch.name}
+                      icon="branch"
+                      current={branch.isHead}
+                    >
+                      <Text size="xs" weight="medium" truncate>
+                        {branch.name}
                       </Text>
-                    ) : null}
-                    <Row gap="xs" align="center" wrap>
-                      {branch.isHead ? <Badge tone="accent">HEAD</Badge> : null}
-                      {branch.upstream ? (
-                        <Text size="xs" muted>
-                          tracking {branch.upstream}
+                      {branch.lastCommitSubject ? (
+                        <Text size="xs" muted truncate>
+                          {branch.lastCommitSubject}
                         </Text>
                       ) : null}
-                      {branch.lastCommitDate ? (
-                        <Text size="xs" muted>
-                          {branch.lastCommitDate.split(' ')[0]}
-                        </Text>
-                      ) : null}
-                    </Row>
-                  </ListItem>
-                ))}
-              </List>
-            </Box>
-          )}
-        </Stack>
-      )}
+                      <Row gap="xs" align="center" wrap>
+                        {branch.isHead ? <Badge tone="accent">HEAD</Badge> : null}
+                        {branch.upstream ? (
+                          <Text size="xs" muted>
+                            tracking {branch.upstream}
+                          </Text>
+                        ) : null}
+                        {branch.lastCommitDate ? (
+                          <Text size="xs" muted>
+                            {branch.lastCommitDate.split(' ')[0]}
+                          </Text>
+                        ) : null}
+                      </Row>
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+            )}
+          </Stack>
+        </Tab>
+      </Tabs>
     </Stack>
   )
 }

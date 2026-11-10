@@ -97,7 +97,7 @@ test('renders repo context and switches tabs', async () => {
   assert.ok(view.find({ text: '#41 Fix branch ordering' }))
 
   // Switch tab to PRs
-  await view.press({ text: 'PRs (2)' })
+  await view.select({ role: 'tablist' }, 'prs')
   await view.settled()
   assert.ok(view.find({ text: '#10 Add PR support to sidebar' }))
 
@@ -107,7 +107,7 @@ test('renders repo context and switches tabs', async () => {
   assert.ok(view.find({ text: '#9 Draft PR for testing' }))
 
   // Switch tab to Branches
-  await view.press({ text: 'Branches (2)' })
+  await view.select({ role: 'tablist' }, 'branches')
   await view.settled()
   assert.ok(view.find({ text: 'feature/orca-sidebar' }))
   assert.ok(view.find({ text: 'main' }))
