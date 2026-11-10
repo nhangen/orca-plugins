@@ -88,29 +88,29 @@ test('renders repo context and switches tabs', async () => {
   // Check header displays repo
   assert.ok(view.find({ text: 'test-owner/test-repo' }))
 
-  // Default filter is "open" -> Issue #42 should be visible as a ListItem with its title in label
-  assert.ok(view.find({ label: '#42 Implement sidebar tab for issues' }))
+  // Default filter is "open" -> Issue #42 should be visible as a ListItem with its title text
+  assert.ok(view.find({ text: '#42 Implement sidebar tab for issues' }))
 
   // Switch to "closed" filter
   await view.press({ text: 'Closed (1)' })
   await view.settled()
-  assert.ok(view.find({ label: '#41 Fix branch ordering' }))
+  assert.ok(view.find({ text: '#41 Fix branch ordering' }))
 
   // Switch tab to PRs
   await view.select({ role: 'tablist' }, 'prs')
   await view.settled()
-  assert.ok(view.find({ label: '#10 Add PR support to sidebar' }))
+  assert.ok(view.find({ text: '#10 Add PR support to sidebar' }))
 
   // Switch PR filter to draft
   await view.press({ text: 'Draft (1)' })
   await view.settled()
-  assert.ok(view.find({ label: '#9 Draft PR for testing' }))
+  assert.ok(view.find({ text: '#9 Draft PR for testing' }))
 
   // Switch tab to Branches
   await view.select({ role: 'tablist' }, 'branches')
   await view.settled()
-  assert.ok(view.find({ label: 'feature/orca-sidebar' }))
-  assert.ok(view.find({ label: 'main' }))
+  assert.ok(view.find({ text: 'feature/orca-sidebar' }))
+  assert.ok(view.find({ text: 'main' }))
 
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])

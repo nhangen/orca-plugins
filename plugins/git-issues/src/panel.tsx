@@ -121,7 +121,7 @@ export default function Panel() {
       {/* Header */}
       <Row justify="between" align="center">
         <Stack gap="xs">
-          <Heading level={2}>{repoTitle}</Heading>
+          <Text size="xs" weight="semibold">{repoTitle}</Text>
           {data?.currentBranch ? (
             <Row gap="xs" align="center">
               <Badge tone="accent">{data.currentBranch}</Badge>
@@ -136,6 +136,7 @@ export default function Panel() {
         <IconButton
           icon="refresh"
           label="Refresh repository context"
+          size="xs"
           onPress={() => void refresh(true)}
           disabled={isLoading}
         />
@@ -204,11 +205,17 @@ export default function Panel() {
                   {filteredIssues.map((issue) => (
                     <ListItem
                       key={String(issue.number)}
-                      title={`#${issue.number} ${issue.title}`}
-                      description={issue.author ? `Opened by ${issue.author}` : undefined}
                       icon={issue.state === 'OPEN' ? 'bug' : 'check'}
                       onPress={() => void shell.openExternal(issue.url)}
                     >
+                      <Text size="xs" weight="medium" truncate>
+                        {`#${issue.number} ${issue.title}`}
+                      </Text>
+                      {issue.author ? (
+                        <Text size="xs" muted truncate>
+                          {`Opened by ${issue.author}`}
+                        </Text>
+                      ) : null}
                       <Row gap="xs" align="center" wrap>
                         <Badge tone={issue.state === 'OPEN' ? 'accent' : 'neutral'}>
                           {issue.state.toLowerCase()}
@@ -307,17 +314,21 @@ export default function Panel() {
                   {filteredPRs.map((pr) => (
                     <ListItem
                       key={String(pr.number)}
-                      title={`#${pr.number} ${pr.title}`}
-                      description={
-                        pr.headRefName
-                          ? `${pr.author ? `Opened by ${pr.author} · ` : ''}${pr.headRefName} → ${pr.baseRefName ?? 'main'}`
-                          : pr.author
-                            ? `Opened by ${pr.author}`
-                            : undefined
-                      }
                       icon={pr.state === 'MERGED' ? 'check' : pr.isDraft ? 'file-text' : pr.state === 'OPEN' ? 'branch' : 'close'}
                       onPress={() => void shell.openExternal(pr.url)}
                     >
+                      <Text size="xs" weight="medium" truncate>
+                        {`#${pr.number} ${pr.title}`}
+                      </Text>
+                      {pr.headRefName ? (
+                        <Text size="xs" muted truncate>
+                          {`${pr.author ? `Opened by ${pr.author} · ` : ''}${pr.headRefName} → ${pr.baseRefName ?? 'main'}`}
+                        </Text>
+                      ) : pr.author ? (
+                        <Text size="xs" muted truncate>
+                          {`Opened by ${pr.author}`}
+                        </Text>
+                      ) : null}
                       <Row gap="xs" align="center" wrap>
                         <Badge tone={pr.isDraft ? 'neutral' : pr.state === 'OPEN' ? 'accent' : 'neutral'}>
                           {pr.isDraft ? 'draft' : pr.state.toLowerCase()}
@@ -372,11 +383,17 @@ export default function Panel() {
                   {filteredBranches.map((branch) => (
                     <ListItem
                       key={branch.name}
-                      title={branch.name}
-                      description={branch.lastCommitSubject || undefined}
                       icon="branch"
                       current={branch.isHead}
                     >
+                      <Text size="xs" weight="medium" truncate>
+                        {branch.name}
+                      </Text>
+                      {branch.lastCommitSubject ? (
+                        <Text size="xs" muted truncate>
+                          {branch.lastCommitSubject}
+                        </Text>
+                      ) : null}
                       <Row gap="xs" align="center" wrap>
                         {branch.isHead ? <Badge tone="accent">HEAD</Badge> : null}
                         {branch.upstream ? (

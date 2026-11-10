@@ -64,8 +64,8 @@ const mockContext: RepoContext = {
 export default defineCheck({
   fresh: {},
   loaded: {
-    storage: {
-      latestContext: mockContext
+    requests: {
+      'repo.getContext': () => mockContext
     }
   }
 })
