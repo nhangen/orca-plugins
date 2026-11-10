@@ -19,8 +19,8 @@
       "releases": [
         {
           "version": "0.1.4",
-          "commit": "7bd9af82351139bb457f6d95ab2829ee9fa69192",
-          "contentHash": "a28cf7ecfbd9545516f62f662be7b6a8f0371636a098ccaf681cd51af4aaf2af",
+          "commit": "f1973fd4e77afd8f21e61211876db0ee77284e5b",
+          "contentHash": "5230e76e970a20b4650ad9e7679b930e46e68d6d8c6d7d651f1e04933da8a3f1",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
           "name": "Git Issues, PRs & Branches",
