@@ -71,12 +71,25 @@ Yes. The plugin parses standard HTTPS remotes (`https://github.com/owner/repo.gi
 
 ### What permissions does this plugin need?
 - `workspace:read`: Used to read the active workspace directory path and branch name to query git status.
+- `agent:read`: Used to correlate agent terminals with their workspace, which identifies the focused repo when several share a branch and name.
 - `storage:own`: Used to cache repository issues and pull requests locally to minimize network latency and API requests.
+
+As a trusted worker, the plugin also runs `git`, `gh`, and the Orca CLI (`orca terminal show`) directly. That last command returns terminal metadata and a preview of the terminal's output, which no declared capability covers; the plugin reads only `worktreePath` from it.
 
 ### Why does the panel show the wrong repo when several main clones are on `main`?
 Orca's plugin API reports the focused workspace as `{branch, displayName}` only — no path or workspace id — and Orca names every root clone after its checked-out branch (`main`). When two or more local repositories sit on the same branch with the same name, the plugin cannot tell which one you focused, so the panel shows a **workspace picker at the top**. Choose your repo and the pick is remembered for that branch + name, across worker restarts.
 
-The pick is shared by every workspace with that branch and name: after you pick `claude-ceo`, focusing another `main`/`main` clone still shows `claude-ceo` until you pick again. To make a clone resolve on its own, give its workspace a unique name in Orca; a unique name on the shared branch matches exactly and needs no picker.
+Two signals identify the focused workspace exactly, in this order:
+
+1. **Orca CLI join**: when the focus is ambiguous, the plugin runs the Orca app's own CLI, `orca terminal show --terminal=<id> --json`, for up to three of the focused workspace's terminals, and reads each terminal's `worktreePath`. It works for local terminals; paired or remote-host terminals return no path. This is not a documented plugin contract, so any unexpected output counts as "no signal". The command also returns a preview of the terminal's output. The plugin parses it in memory and never logs or stores it. The join was verified on Orca 1.4.255 only; if an older build answers differently, the join finds nothing and the plugin falls back.
+2. **Agent correlation**: `agent.status.changed` events tie terminal ids to workspace ids; a terminal that has reported status once pins its workspace.
+
+Either signal resolves the focus with no picker. When neither applies, the panel falls back to a guess and keeps the picker up so you can correct it:
+
+3. **Per-workspace locker**: the panel remembers, in a `persist: 'workspace'` atom that Orca keys per workspace, the path a focused terminal last identified or the repo you last picked there. Revisiting that workspace with no terminals open preselects it in the picker.
+4. **Shared pick**: otherwise, the repo last picked for that branch + name.
+
+The pick fallback is shared by every workspace with that branch and name: after you pick `claude-ceo`, focusing another `main`/`main` clone still shows `claude-ceo` until one of the signals above resolves it, or you pick again. The locker only covers workspaces you have visited with a terminal open or picked in. To make a clone resolve on its own without any signal, give its workspace a unique name in Orca; a unique name on the shared branch matches exactly and needs no picker.
 
 ### What if I rename a workspace later?
 A renamed workspace with a unique name resolves directly. If the new name is shared too, the pick is keyed by the new branch + name, so pick again once.

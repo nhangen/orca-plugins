@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "git-issues",
   "name": "Git Issues, PRs & Branches",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Show GitHub issues, pull requests, and git branches for the currently loaded repository in Orca's sidebar.",
   "license": "MIT",
   "icon": "assets/icon.png",
@@ -43,6 +43,9 @@
     "events": [
       {
         "on": "workspace.changed"
+      },
+      {
+        "on": "agent.status.changed"
       }
     ]
   },
@@ -52,6 +55,9 @@
     },
     {
       "kind": "workspace:read"
+    },
+    {
+      "kind": "agent:read"
     }
   ]
 }

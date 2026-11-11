@@ -60,13 +60,22 @@ export interface RepoContext {
   ambiguous?: boolean
   /** The indistinguishable workspaces the panel can pick between when `ambiguous`. */
   candidates?: RepoCandidate[]
+  /**
+   * Which signal chose `workspacePath`: the only match, a focused terminal, the panel's
+   * per-workspace hint, the pick shared by every workspace on this branch+name, or none of them.
+   */
+  resolvedBy?: ResolvedBy
+  /** True when Orca's focus changed while this context was collected, so it may describe another workspace. */
+  focusMoved?: boolean
 }
+
+export type ResolvedBy = 'unique' | 'terminal' | 'hint' | 'pick' | null
 
 declare module 'orca' {
   interface PluginRequests {
     /** Gets the current repository context (issues, branches, current branch, and repo slug). */
     'repo.getContext': {
-      input: { forceRefresh?: boolean }
+      input: { forceRefresh?: boolean; hintPath?: string }
       output: RepoContext
     }
     /** Sets the user's workspace pick for an ambiguous focused context and returns a fresh context. */

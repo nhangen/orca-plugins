@@ -19,7 +19,7 @@ function withTempWorkspaces(names: string[], run: (paths: string[]) => Promise<v
 
 const baseHost = (workspaces: unknown[], options: Record<string, unknown> = {}): Object =>
   mockHost({
-    capabilities: ['storage:own', 'workspace:read'],
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
     results: {
       'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
       'workspace.list': { workspaces, truncated: false },
@@ -55,7 +55,7 @@ feature/xyz|*|origin/feature/xyz|Work in progress|2026-11-10
 
 test('worker registers repo.getContext handler and answers requests', async () => {
   const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read'],
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
     results: {
       'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
       'workspace.list': {
@@ -80,7 +80,7 @@ test('worker picks the folder workspace when its branch is null and a sibling wo
   ['my-project.wt', 'my-project'],
   async ([worktreePath, folderPath]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
         'workspace.list': {
@@ -123,7 +123,7 @@ test('worker honors a stored workspace pick on a fresh worker', withTempWorkspac
   async ([alice, bob]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'main|main': bob } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -142,7 +142,7 @@ test('worker falls back to the first candidate and prunes a pick whose path no l
   async ([alice, bob]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'main|main': '/gone/missing' } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -179,7 +179,7 @@ test('a pick keeps the picks stored for other branch and name keys', withTempWor
   async ([alice, bob, dev]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'develop|develop': dev } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -198,7 +198,7 @@ test('a pick still applies for the session when storage refuses the write', with
   async ([alice, bob]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'main|main': alice } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -224,7 +224,7 @@ test('a failed pick write does not block the writes queued after it', withTempWo
     const store: Record<string, any> = { workspaceChoices: { 'dev|dev': join(tmpdir(), 'wb-never-existed') } }
     let choiceWrites = 0
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
         'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false },
@@ -276,7 +276,7 @@ test('a slow collect for an earlier focus is not posted after a newer one', with
   async ([a, b]) => {
     let focus = 'a'
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': () => ({ branch: focus, displayName: focus, terminals: [] }),
         'workspace.list': {
@@ -329,7 +329,7 @@ test('a uniquely named folder workspace beats an unrelated clone on the focused 
   ['my-project', 'other-clone'],
   async ([folder, clone]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
         'workspace.list': {
@@ -353,7 +353,7 @@ test('with no match a folder workspace is not guessed either', withTempWorkspace
   ['wb-wt', 'wb-folder'],
   async ([wt, folder]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'release', displayName: 'release', terminals: [] },
         'workspace.list': {
@@ -379,7 +379,7 @@ test('a prune that read storage before a pick does not erase the pick', withTemp
   async ([alice, bob, retired]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'old|old': retired } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -435,7 +435,7 @@ test('a context with no local workspace reports it instead of running git elsewh
 
 test('a failed workspace read is reported as itself, not as a missing workspace', async () => {
   const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read'],
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
     results: {
       'workspace.readContext': () => {
         throw hostError('action_failed', 'host unavailable')
@@ -450,6 +450,417 @@ test('a failed workspace read is reported as itself, not as a missing workspace'
   assert.match(result.issuesError, /host unavailable/)
   await worker.deactivate()
 })
+
+test('a learned agent terminal identifies the focused workspace without a picker', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-bob' }] },
+        'workspace.list': { workspaces: [entry(alice, 'w-alice'), entry(bob, 'w-bob')], truncated: false }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const before = (await worker.request('repo.getContext')) as any
+    assert.ok(before.ambiguous)
+    await worker.emit('agent.status.changed', { workspaceId: 'w-bob', terminalId: 'term-bob', paneKey: 'p1', state: 'working', receivedAt: 1 })
+    const after = (await worker.request('repo.getContext')) as any
+    assert.ok(!after.ambiguous)
+    assert.equal(after.workspacePath, bob)
+    assert.deepEqual(host.data().storage.workspaceChoices, undefined)
+    await worker.deactivate()
+  }
+))
+
+test('learned terminal owners are bounded, oldest first', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-bob' }] },
+        'workspace.list': { workspaces: [entry(alice, 'w-alice'), entry(bob, 'w-bob')], truncated: false }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    await worker.emit('agent.status.changed', { workspaceId: 'w-bob', terminalId: 'term-bob', paneKey: 'p1', state: 'working', receivedAt: 1 })
+    assert.equal(((await worker.request('repo.getContext')) as any).workspacePath, bob)
+    for (let i = 0; i < 100; i++) {
+      await worker.emit('agent.status.changed', { workspaceId: 'w-alice', terminalId: `term-${i}`, paneKey: `p${i}`, state: 'working', receivedAt: 2 + i })
+    }
+    assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+    await worker.deactivate()
+  }
+))
+
+test('a terminal owned by a workspace outside the branch+name matches is ignored', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-x' }] },
+        'workspace.list': {
+          workspaces: [entry(alice, 'w-alice'), entry(bob, 'w-bob'), { id: 'w-x', kind: 'worktree', name: 'dev', path: '/remote/dev', branch: 'dev', hostId: 'ssh-box' }],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    await worker.emit('agent.status.changed', { workspaceId: 'w-x', terminalId: 'term-x', paneKey: 'p1', state: 'working', receivedAt: 1 })
+    const context = (await worker.request('repo.getContext')) as any
+    assert.ok(context.ambiguous)
+    assert.equal(context.workspacePath, alice)
+    await worker.deactivate()
+  }
+))
+
+test('a focused terminal Orca never tied to a workspace leaves the picker in place', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-unknown' }] },
+        'workspace.list': { workspaces: [entry(alice, 'w-alice'), entry(bob, 'w-bob')], truncated: false }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const context = (await worker.request('repo.getContext')) as any
+    assert.ok(context.ambiguous)
+    assert.equal(context.workspacePath, alice)
+    await worker.deactivate()
+  }
+))
+
+const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
+type OrcaRunner = (cli: string, args: string[]) => Promise<{ stdout: string }>
+const missingBinary = (): Error => Object.assign(new Error('spawn orca ENOENT'), { code: 'ENOENT' })
+const noOrca: OrcaRunner = async () => {
+  throw missingBinary()
+}
+main.testHooks.execOrca = noOrca
+
+/** Answers only `orca terminal show --terminal=<id> --json`; any other argv fails the call loudly. */
+function terminalShowStub(answers: Record<string, () => Promise<{ stdout: string }>>, calls: string[][]): OrcaRunner {
+  return async (cli, args) => {
+    calls.push([cli, ...args])
+    const flag = args.length === 4 && args[0] === 'terminal' && args[1] === 'show' && args[3] === '--json'
+      ? /^--terminal=(.+)$/.exec(args[2])
+      : null
+    if (!flag) throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    const answer = answers[flag[1]]
+    if (!answer) throw new Error(`unexpected terminal ${flag[1]}`)
+    return answer()
+  }
+}
+const showPath = (path: string) => async () => ({
+  stdout: JSON.stringify({ ok: true, result: { terminal: { handle: 'term-1', worktreeId: `repo::${path}`, worktreePath: path } } })
+})
+const showStale = async (): Promise<{ stdout: string }> => {
+  throw Object.assign(new Error('Command failed: orca terminal show'), {
+    code: 1,
+    stdout: JSON.stringify({ ok: false, error: { code: 'terminal_handle_stale', message: 'stale' } })
+  })
+}
+const showTimeout = async (): Promise<{ stdout: string }> => {
+  throw Object.assign(new Error('Command failed: orca terminal show'), { killed: true, signal: 'SIGTERM', stdout: '' })
+}
+
+async function withOrca(runner: OrcaRunner, run: () => Promise<void>): Promise<void> {
+  main.testHooks.execOrca = runner
+  try {
+    await run()
+  } finally {
+    main.testHooks.execOrca = noOrca
+  }
+}
+
+const sameNameHost = (paths: string[], terminals: { id: string }[] = [{ id: 'term-1' }]) => {
+  const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+  return mockHost({
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+    results: {
+      'workspace.readContext': { branch: 'main', displayName: 'main', terminals },
+      'workspace.list': { workspaces: paths.map(entry), truncated: false }
+    }
+  })
+}
+
+test('a focused terminal resolved through the orca CLI join ends the ambiguity', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showPath(bob) }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.ok(!context.ambiguous)
+      assert.equal(context.workspacePath, bob)
+      assert.deepEqual(calls, [[APP_ORCA, 'terminal', 'show', '--terminal=term-1', '--json']])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a stale terminal handle is a cached miss that keeps the picker', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showStale }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const first = (await worker.request('repo.getContext')) as any
+      assert.ok(first.ambiguous)
+      assert.equal(first.workspacePath, alice)
+      const second = (await worker.request('repo.getContext')) as any
+      assert.ok(second.ambiguous)
+      assert.equal(calls.length, 1)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a terminal with no local worktree is a cached miss', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    const remote = async () => ({ stdout: JSON.stringify({ ok: true, result: { terminal: { handle: 'term-1', worktreePath: null } } }) })
+    await withOrca(terminalShowStub({ 'term-1': remote }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.equal(calls.length, 1)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('an ok:false answer other than a stale handle is retried, not cached', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    let answer = async (): Promise<{ stdout: string }> => {
+      throw Object.assign(new Error('Command failed: orca terminal show'), {
+        code: 1,
+        stdout: JSON.stringify({ ok: false, error: { code: 'runtime_unavailable', message: 'Orca is starting' } })
+      })
+    }
+    await withOrca(terminalShowStub({ 'term-1': () => answer() }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      answer = showPath(bob)
+      const second = (await worker.request('repo.getContext')) as any
+      assert.equal(second.workspacePath, bob)
+      assert.equal(calls.length, 2)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a timed-out CLI lookup is not cached and is retried on the next collect', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    let answer = showTimeout
+    await withOrca(terminalShowStub({ 'term-1': () => answer() }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const first = (await worker.request('repo.getContext')) as any
+      assert.ok(first.ambiguous)
+      assert.equal(calls.length, 1)
+      answer = showPath(bob)
+      const second = (await worker.request('repo.getContext')) as any
+      assert.ok(!second.ambiguous)
+      assert.equal(second.workspacePath, bob)
+      assert.equal(calls.length, 2)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('output that is not JSON is not cached either', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': async () => ({ stdout: 'Orca is starting...' }) }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.equal(calls.length, 2)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('the bundled CLI is tried first and a bare orca on PATH only when it is missing', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    const show = terminalShowStub({ 'term-1': showPath(bob) }, calls)
+    const runner: OrcaRunner = async (cli, args) => {
+      if (cli === APP_ORCA) {
+        calls.push([cli, ...args])
+        throw missingBinary()
+      }
+      return show(cli, args)
+    }
+    await withOrca(runner, async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.equal(context.workspacePath, bob)
+      assert.deepEqual(calls.map((c) => c[0]), [APP_ORCA, 'orca'])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a CLI that runs but fails does not fall through to a bare orca on PATH', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showTimeout }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      await worker.request('repo.getContext')
+      assert.deepEqual(calls.map((c) => c[0]), [APP_ORCA])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a unique match never spawns the orca CLI', withTempWorkspaces(
+  ['wb-alice'],
+  async ([alice]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({}, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.equal(context.workspacePath, alice)
+      assert.deepEqual(calls, [])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a terminal id shaped like a flag never reaches the orca CLI', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({}, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob], [{ id: '--host=evil' }]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.ok(context.ambiguous)
+      assert.deepEqual(calls, [])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a focused terminal whose CLI-joined path is outside the candidates stays ambiguous', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showPath('/somewhere/else') }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.ok(context.ambiguous)
+      assert.equal(context.workspacePath, alice)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a locker hint among the candidates is shown preselected without writing a pick', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const host = sameNameHost([alice, bob])
+    const worker = await mountWorker(main, { host })
+    const context = (await worker.request('repo.getContext', { hintPath: bob })) as any
+    assert.equal(context.workspacePath, bob)
+    assert.equal(context.resolvedBy, 'hint')
+    assert.ok(context.ambiguous)
+    assert.deepEqual(context.candidates.map((c: any) => c.path), [alice, bob])
+    assert.equal(host.data().storage.workspaceChoices, undefined)
+    const plain = (await worker.request('repo.getContext')) as any
+    assert.equal(plain.workspacePath, alice)
+    assert.equal(plain.resolvedBy, null)
+    await worker.deactivate()
+  }
+))
+
+test('a locker hint beats the pick shared across same-name workspaces', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+    const picked = (await worker.request('repo.chooseWorkspace', { path: bob })) as any
+    assert.equal(picked.workspacePath, bob)
+    assert.equal(picked.resolvedBy, 'pick')
+    const hinted = (await worker.request('repo.getContext', { hintPath: alice })) as any
+    assert.equal(hinted.workspacePath, alice)
+    assert.equal(hinted.resolvedBy, 'hint')
+    await worker.deactivate()
+  }
+))
+
+test('a locker hint outside the candidates is ignored', withTempWorkspaces(
+  ['wb-alice', 'wb-bob', 'wb-carol'],
+  async ([alice, bob, carol]) => {
+    const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+    const context = (await worker.request('repo.getContext', { hintPath: carol })) as any
+    assert.equal(context.workspacePath, alice)
+    assert.notEqual(context.resolvedBy, 'hint')
+    await worker.deactivate()
+  }
+))
+
+test('contexts say which signal resolved them', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const unique = await mountWorker(main, { host: sameNameHost([alice]) })
+    assert.equal(((await unique.request('repo.getContext')) as any).resolvedBy, 'unique')
+    await unique.deactivate()
+    await withOrca(terminalShowStub({ 'term-1': showPath(bob) }, []), async () => {
+      const joined = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await joined.request('repo.getContext')) as any
+      assert.equal(context.resolvedBy, 'terminal')
+      assert.equal(context.focusMoved, false)
+      await joined.deactivate()
+    })
+  }
+))
+
+test('a context reports when the focus moved while it was being collected', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    let terminals = [{ id: 'term-1' }]
+    let moveDuringList = false
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': () => ({ branch: 'main', displayName: 'main', terminals }),
+        'workspace.list': () => {
+          if (moveDuringList) {
+            moveDuringList = false
+            terminals = [{ id: 'term-2' }]
+          }
+          return { workspaces: [entry(alice), entry(bob)], truncated: false }
+        }
+      }
+    })
+    await withOrca(terminalShowStub({ 'term-1': showPath(bob), 'term-2': showPath(alice) }, []), async () => {
+      const worker = await mountWorker(main, { host })
+      assert.equal(((await worker.request('repo.getContext')) as any).focusMoved, false)
+      moveDuringList = true
+      const moved = (await worker.request('repo.getContext')) as any
+      assert.equal(moved.workspacePath, bob)
+      assert.equal(moved.focusMoved, true)
+      await worker.deactivate()
+    })
+  }
+))
 
 test('labels stay distinct when the last two folders also match', async () => {
   const root = mkdtempSync(join(tmpdir(), 'wb-deep-'))
@@ -472,7 +883,7 @@ test('worker prefers a worktree whose branch matches the focused branch', withTe
   ['my-project', 'my-project.wt'],
   async ([folderPath, worktreePath]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'draft', displayName: 'draft', terminals: [] },
         'workspace.list': {
@@ -495,7 +906,7 @@ test('a renamed workspace on a shared branch resolves to itself without a picker
   ['wb-ceo', 'wb-tools'],
   async ([ceo, tools]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'ceo', terminals: [] },
         'workspace.list': {
@@ -547,7 +958,7 @@ test('no workspace matching the focused branch or name is reported rather than g
   ['wb-one', 'wb-two'],
   async ([one, two]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'release', displayName: 'release', terminals: [] },
         'workspace.list': {
@@ -573,7 +984,7 @@ test('a single local workspace that does not match the focused one is not used',
   ['wb-only'],
   async ([only]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'feature-x', displayName: 'feature-x', terminals: [] },
         'workspace.list': {
@@ -599,7 +1010,7 @@ test('with nothing focused no workspace is guessed', withTempWorkspaces(
   ['wb-only'],
   async ([only]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': null,
         'workspace.list': {

@@ -188,3 +188,126 @@ test('accepts an older stamp from a restarted worker', async () => {
   assert.ok(view.find({ text: 'owner/restarted' }))
   await view.unmount()
 })
+
+const alphaBeta = [
+  { path: '/code/alpha', name: 'alpha' },
+  { path: '/code/beta', name: 'beta' }
+]
+
+/** A worker double that resolves an ambiguous focus like the real one: hint, then the stored pick. */
+function lockerHost(options: { storedPick?: string } = {}) {
+  const contextRequests: { hintPath?: string }[] = []
+  const picks: string[] = []
+  let stamp = 100
+  let storedPick = options.storedPick ?? '/code/alpha'
+  const ambiguousAt = (path: string, resolvedBy: RepoContext['resolvedBy']): RepoContext => ({
+    ...sampleContext,
+    repoSlug: `owner/${path.split('/').pop()}`,
+    workspacePath: path,
+    requestedAt: ++stamp,
+    ambiguous: true,
+    resolvedBy,
+    candidates: alphaBeta
+  })
+  const host = mockHost({
+    requests: {
+      'repo.getContext': (input) => {
+        contextRequests.push({ hintPath: input?.hintPath })
+        const hint = alphaBeta.find((c) => c.path === input?.hintPath)
+        return hint ? ambiguousAt(hint.path, 'hint') : ambiguousAt(storedPick, 'pick')
+      },
+      'repo.chooseWorkspace': (input) => {
+        picks.push(input.path)
+        storedPick = input.path
+        return ambiguousAt(input.path, 'pick')
+      }
+    }
+  })
+  return { host, contextRequests, picks, ambiguousAt }
+}
+
+test('a manual pick survives a locker that pointed at another workspace', async () => {
+  const { host, picks } = lockerHost()
+  const view = await mount(panel, { host, persisted: { workspace: { lastResolvedPath: '/code/alpha' } } })
+  await view.settled()
+  await view.select(view.find({ role: 'combobox' })!, '/code/beta')
+  await view.settled()
+  await view.settled()
+  assert.deepEqual(picks, ['/code/beta'])
+  assert.ok(view.find({ text: 'owner/beta' }))
+  assert.equal(view.persisted.workspace.lastResolvedPath, '/code/beta')
+  await view.unmount()
+})
+
+test('the locker hint rides on repo.getContext and never writes a pick', async () => {
+  const { host, contextRequests, picks, ambiguousAt } = lockerHost({ storedPick: '/code/beta' })
+  const view = await mount(panel, { host, persisted: { workspace: { lastResolvedPath: '/code/alpha' } } })
+  await view.settled()
+  assert.equal(contextRequests[0]?.hintPath, '/code/alpha')
+  assert.ok(view.find({ text: 'owner/alpha' }))
+  await view.post('repo.changed', ambiguousAt('/code/beta', 'pick'))
+  await view.settled()
+  await view.settled()
+  assert.ok(view.find({ text: 'owner/alpha' }))
+  assert.deepEqual(contextRequests.map((r) => r.hintPath), ['/code/alpha', '/code/alpha'])
+  assert.deepEqual(picks, [])
+  assert.ok(view.find({ role: 'combobox' }))
+  await view.unmount()
+})
+
+test('a hint the worker could not honor is not re-requested in a loop', async () => {
+  const contextRequests: unknown[] = []
+  let stamp = 100
+  const host = mockHost({
+    requests: {
+      'repo.getContext': (input) => {
+        contextRequests.push(input)
+        return { ...sampleContext, workspacePath: '/code/beta', requestedAt: ++stamp, ambiguous: true, resolvedBy: 'pick', candidates: alphaBeta }
+      }
+    }
+  })
+  const view = await mount(panel, { host, persisted: { workspace: { lastResolvedPath: '/code/alpha' } } })
+  await view.settled()
+  await view.settled()
+  assert.equal(contextRequests.length, 1)
+  await view.unmount()
+})
+
+test('a terminal-resolved context the panel rejected as stale never writes the locker', async () => {
+  const host = mockHost({
+    requests: {
+      'repo.getContext': () => ({ ...sampleContext, workspacePath: '/code/beta', requestedAt: 200, resolvedBy: 'terminal' })
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  assert.equal(view.persisted.workspace.lastResolvedPath, '/code/beta')
+  await view.post('repo.changed', { ...sampleContext, workspacePath: '/code/alpha', requestedAt: 50, resolvedBy: 'terminal' })
+  await view.settled()
+  assert.equal(view.persisted.workspace.lastResolvedPath, '/code/beta')
+  await view.unmount()
+})
+
+test('a context whose focus moved while it was collected never writes the locker', async () => {
+  const host = mockHost({ requests: { 'repo.getContext': () => sampleContext } })
+  const view = await mount(panel, { host })
+  await view.settled()
+  await view.post('repo.changed', { ...sampleContext, repoSlug: 'owner/alpha', workspacePath: '/code/alpha', requestedAt: sampleContext.requestedAt + 300, resolvedBy: 'terminal', focusMoved: true })
+  await view.settled()
+  assert.ok(view.find({ text: 'owner/alpha' }))
+  assert.equal(view.persisted.workspace.lastResolvedPath ?? null, null)
+  await view.unmount()
+})
+
+test('only a terminal-resolved context fills the locker', async () => {
+  const host = mockHost({ requests: { 'repo.getContext': () => sampleContext } })
+  const view = await mount(panel, { host })
+  await view.settled()
+  await view.post('repo.changed', { ...sampleContext, workspacePath: '/code/unique', requestedAt: sampleContext.requestedAt + 300, resolvedBy: 'unique' })
+  await view.settled()
+  assert.equal(view.persisted.workspace.lastResolvedPath ?? null, null)
+  await view.post('repo.changed', { ...sampleContext, workspacePath: '/code/alpha', requestedAt: sampleContext.requestedAt + 400, resolvedBy: 'terminal' })
+  await view.settled()
+  assert.equal(view.persisted.workspace.lastResolvedPath, '/code/alpha')
+  await view.unmount()
+})
