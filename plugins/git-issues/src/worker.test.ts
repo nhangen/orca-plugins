@@ -19,7 +19,7 @@ function withTempWorkspaces(names: string[], run: (paths: string[]) => Promise<v
 
 const baseHost = (workspaces: unknown[], options: Record<string, unknown> = {}): Object =>
   mockHost({
-    capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
     results: {
       'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
       'workspace.list': { workspaces, truncated: false },
@@ -55,7 +55,7 @@ feature/xyz|*|origin/feature/xyz|Work in progress|2026-11-10
 
 test('worker registers repo.getContext handler and answers requests', async () => {
   const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
     results: {
       'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
       'workspace.list': {
@@ -80,7 +80,7 @@ test('worker picks the folder workspace when its branch is null and a sibling wo
   ['my-project.wt', 'my-project'],
   async ([worktreePath, folderPath]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
         'workspace.list': {
@@ -123,7 +123,7 @@ test('worker honors a stored workspace pick on a fresh worker', withTempWorkspac
   async ([alice, bob]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'main|main': bob } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -142,7 +142,7 @@ test('worker falls back to the first candidate and prunes a pick whose path no l
   async ([alice, bob]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'main|main': '/gone/missing' } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -179,7 +179,7 @@ test('a pick keeps the picks stored for other branch and name keys', withTempWor
   async ([alice, bob, dev]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'develop|develop': dev } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -198,7 +198,7 @@ test('a pick still applies for the session when storage refuses the write', with
   async ([alice, bob]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'main|main': alice } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -224,7 +224,7 @@ test('a failed pick write does not block the writes queued after it', withTempWo
     const store: Record<string, any> = { workspaceChoices: { 'dev|dev': join(tmpdir(), 'wb-never-existed') } }
     let choiceWrites = 0
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
         'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false },
@@ -276,7 +276,7 @@ test('a slow collect for an earlier focus is not posted after a newer one', with
   async ([a, b]) => {
     let focus = 'a'
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': () => ({ branch: focus, displayName: focus, terminals: [] }),
         'workspace.list': {
@@ -329,7 +329,7 @@ test('a uniquely named folder workspace beats an unrelated clone on the focused 
   ['my-project', 'other-clone'],
   async ([folder, clone]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
         'workspace.list': {
@@ -353,7 +353,7 @@ test('with no match a folder workspace is not guessed either', withTempWorkspace
   ['wb-wt', 'wb-folder'],
   async ([wt, folder]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'release', displayName: 'release', terminals: [] },
         'workspace.list': {
@@ -379,7 +379,7 @@ test('a prune that read storage before a pick does not erase the pick', withTemp
   async ([alice, bob, retired]) => {
     const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       storage: { workspaceChoices: { 'old|old': retired } },
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [] },
@@ -435,7 +435,7 @@ test('a context with no local workspace reports it instead of running git elsewh
 
 test('a failed workspace read is reported as itself, not as a missing workspace', async () => {
   const host = mockHost({
-    capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
     results: {
       'workspace.readContext': () => {
         throw hostError('action_failed', 'host unavailable')
@@ -456,7 +456,7 @@ test('a learned agent terminal identifies the focused workspace without a picker
   async ([alice, bob]) => {
     const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-bob' }] },
         'workspace.list': { workspaces: [entry(alice, 'w-alice'), entry(bob, 'w-bob')], truncated: false }
@@ -501,7 +501,7 @@ test('a terminal owned by a workspace outside the branch+name matches is ignored
   async ([alice, bob]) => {
     const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-x' }] },
         'workspace.list': {
@@ -524,7 +524,7 @@ test('a focused terminal Orca never tied to a workspace leaves the picker in pla
   async ([alice, bob]) => {
     const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-unknown' }] },
         'workspace.list': { workspaces: [entry(alice, 'w-alice'), entry(bob, 'w-bob')], truncated: false }
@@ -846,7 +846,7 @@ test('worker prefers a worktree whose branch matches the focused branch', withTe
   ['my-project', 'my-project.wt'],
   async ([folderPath, worktreePath]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'draft', displayName: 'draft', terminals: [] },
         'workspace.list': {
@@ -869,7 +869,7 @@ test('a renamed workspace on a shared branch resolves to itself without a picker
   ['wb-ceo', 'wb-tools'],
   async ([ceo, tools]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'main', displayName: 'ceo', terminals: [] },
         'workspace.list': {
@@ -921,7 +921,7 @@ test('no workspace matching the focused branch or name is reported rather than g
   ['wb-one', 'wb-two'],
   async ([one, two]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'release', displayName: 'release', terminals: [] },
         'workspace.list': {
@@ -947,7 +947,7 @@ test('a single local workspace that does not match the focused one is not used',
   ['wb-only'],
   async ([only]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': { branch: 'feature-x', displayName: 'feature-x', terminals: [] },
         'workspace.list': {
@@ -973,7 +973,7 @@ test('with nothing focused no workspace is guessed', withTempWorkspaces(
   ['wb-only'],
   async ([only]) => {
     const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'terminal:send'],
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
       results: {
         'workspace.readContext': null,
         'workspace.list': {
