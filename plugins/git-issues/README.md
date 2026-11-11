@@ -10,21 +10,25 @@ An Orca sidebar plugin that displays GitHub issues, pull requests, and git branc
 
 ## Features
 
+- **Current Branch Card**:
+  - Shows the checked-out branch, its upstream, or that it is local only.
+  - Links the branch's pull request (open first, else its latest merged or closed one), or offers to open one on GitHub.
 - **GitHub Issues Tab**:
   - Automatically detects the GitHub repository slug (`owner/repo`) from the active workspace remote.
   - Queries GitHub issues via `gh` CLI (using existing authentication) or public GitHub REST API fallback.
-  - Filters by issue state (`Open`, `Closed`, `All`) and real-time text search (by title, `#number`, or author).
-  - Shows labels, state badges, author, and relative updated time.
-  - Clicking any issue opens its web page in your default browser.
+  - One row of controls: a search box (title, `#number`, author, or label) beside an `Open` / `Closed` / `All` state menu.
+  - Two-line rows: the title, then the number, relative updated time, labels, and comment count.
+  - Clicking an issue's title or icon opens it in your default browser.
 - **Pull Requests Tab**:
-  - Displays pull requests with dedicated status filters: `Open`, `Draft`, `Merged`, `Closed`, and `All`.
-  - Distinguishes draft PRs with clear badges.
-  - Displays head and target branches (`branch → main`), author, and relative updated timestamps.
-  - Clicking any pull request opens it in your default browser.
+  - The same search box beside an `Open` / `Draft` / `Merged` / `Closed` / `All` state menu.
+  - Shows the number, updated time, head and target branches (`branch → main`), and marks the PR for the current branch.
+  - Clicking a pull request's title or icon opens it in your default browser.
 - **Git Branches Tab**:
-  - Shows all local branches, with the currently checked-out branch marked with an active `HEAD` badge.
-  - Shows upstream tracking branches and latest commit subjects with commit dates.
+  - Shows all local branches, with the checked-out branch highlighted.
+  - Marks each branch's pull request number and any branch that is local only, with its latest commit subject and date.
   - Real-time text search filter for quick branch lookups.
+  - Clicking the name or icon of a branch pushed to `origin` opens it on GitHub; local-only branches have no page to open.
+- **Errors and empty results**: a GitHub error shows a **Retry** button; a search with no matches offers **Clear filter**.
 - **Auto-Syncing**:
   - Automatically updates when switching workspaces or worktrees in Orca (`workspace.changed` event).
   - Includes a manual refresh button in the header.
@@ -103,7 +107,7 @@ This plugin uses the `worker-panel` pattern:
 
 1. **Declarative TSX Panel (`src/panel.tsx`)**:
    - Runs in Orca's sandboxed components runtime (`"ui": "components"`).
-   - Renders with Orca's native components (`Stack`, `Row`, `Tabs`, `Tab`, `List`, `ListItem`, `Badge`, `Button`, `IconButton`, `Input`, `Box`, `RelativeTime`).
+   - Renders with Orca's native components (`Stack`, `Row`, `Box`, `Tabs`, `Tab`, `List`, `ListItem`, `Badge`, `Button`, `IconButton`, `Input`, `Select`, `RadioGroup`, `Callout`, `Skeleton`, `EmptyState`, `RelativeTime`).
    - Communicates with the background worker via typed RPC (`repo.getContext`).
 2. **Node.js Worker (`src/worker.ts`)**:
    - Runs as an out-of-process process on the host (`trusted-worker`).
