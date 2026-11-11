@@ -624,6 +624,28 @@ test('a stale terminal handle is a cached miss that keeps the picker', withTempW
   }
 ))
 
+test('an ok:false answer other than a stale handle is retried, not cached', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    let answer = async (): Promise<{ stdout: string }> => {
+      throw Object.assign(new Error('Command failed: orca terminal show'), {
+        code: 1,
+        stdout: JSON.stringify({ ok: false, error: { code: 'runtime_unavailable', message: 'Orca is starting' } })
+      })
+    }
+    await withOrca(terminalShowStub({ 'term-1': () => answer() }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      answer = showPath(bob)
+      const second = (await worker.request('repo.getContext')) as any
+      assert.equal(second.workspacePath, bob)
+      assert.equal(calls.length, 2)
+      await worker.deactivate()
+    })
+  }
+))
+
 test('a timed-out CLI lookup is not cached and is retried on the next collect', withTempWorkspaces(
   ['wb-alice', 'wb-bob'],
   async ([alice, bob]) => {

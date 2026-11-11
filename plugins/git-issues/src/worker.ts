@@ -113,16 +113,20 @@ function rememberBounded<V>(map: Map<string, V>, key: string, value: V): void {
   map.set(key, value)
 }
 
-/** A path, null for a definitive answer without one (stale handle, remote terminal), undefined when unreadable. */
+/**
+ * A path; null for a definitive answer without one (a stale handle, or a terminal with no local
+ * worktree); undefined for anything that may change on retry, such as a runtime that is not ready.
+ */
 function parseTerminalShow(stdout: string): string | null | undefined {
-  let parsed: { ok?: unknown; result?: { terminal?: { worktreePath?: unknown } } }
+  let parsed: { ok?: unknown; error?: { code?: unknown }; result?: { terminal?: { worktreePath?: unknown } } }
   try {
     parsed = JSON.parse(stdout)
   } catch {
     return undefined
   }
   if (!parsed || typeof parsed !== 'object' || typeof parsed.ok !== 'boolean') return undefined
-  const path = parsed.ok ? parsed.result?.terminal?.worktreePath : null
+  if (!parsed.ok) return parsed.error?.code === 'terminal_handle_stale' ? null : undefined
+  const path = parsed.result?.terminal?.worktreePath
   return typeof path === 'string' && path.length > 0 ? path : null
 }
 
