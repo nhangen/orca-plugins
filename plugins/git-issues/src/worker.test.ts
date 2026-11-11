@@ -624,6 +624,21 @@ test('a stale terminal handle is a cached miss that keeps the picker', withTempW
   }
 ))
 
+test('a terminal with no local worktree is a cached miss', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    const remote = async () => ({ stdout: JSON.stringify({ ok: true, result: { terminal: { handle: 'term-1', worktreePath: null } } }) })
+    await withOrca(terminalShowStub({ 'term-1': remote }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.equal(calls.length, 1)
+      await worker.deactivate()
+    })
+  }
+))
+
 test('an ok:false answer other than a stale handle is retried, not cached', withTempWorkspaces(
   ['wb-alice', 'wb-bob'],
   async ([alice, bob]) => {
