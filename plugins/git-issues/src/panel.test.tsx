@@ -351,6 +351,17 @@ test('a hint the worker could not honor is not re-requested in a loop', async ()
   })
   const view = await mount(panel, { host, persisted: { workspace: { lastResolvedPath: '/code/alpha' } } })
   await view.settled()
+  assert.equal(contextRequests.length, 1)
+
+  // Emitting repo.changed with ambiguous=true and unhonored hint must not trigger an infinite loop
+  await view.post('repo.changed', {
+    ...sampleContext,
+    workspacePath: '/code/beta',
+    requestedAt: ++stamp,
+    ambiguous: true,
+    resolvedBy: 'pick',
+    candidates: alphaBeta
+  })
   await view.settled()
   assert.equal(contextRequests.length, 1)
   await view.unmount()
@@ -506,7 +517,7 @@ test("each row's icon opens the same page as its title", async () => {
   await view.press(icon('Open on GitHub: Add PR support to sidebar'))
   await view.select({ role: 'tablist' }, 'branches')
   await view.settled()
-  await view.press(icon('Open on GitHub: feature/orca-sidebar'))
+  await view.press(view.findAll({ type: 'IconButton', label: 'Open on GitHub: feature/orca-sidebar' }).at(-1)!)
   assert.equal(view.findAll({ type: 'IconButton', label: 'Open on GitHub: scratch/local' }).length, 0)
   assert.equal(view.find({ type: 'ListItem', text: /scratch\/local/ }).props.icon, 'branch')
 
@@ -516,5 +527,63 @@ test("each row's icon opens the same page as its title", async () => {
     { url: 'https://github.com/test-owner/test-repo/tree/feature/orca-sidebar' }
   ])
   assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})
+
+test('searching by number or # matches issues and pull requests', async () => {
+  const host = mockHost({ requests: { 'repo.getContext': () => sampleContext } })
+  const view = await mount(panel, { host })
+  await view.settled()
+
+  await view.type({ label: 'Search issues' }, '#42')
+  await view.settled()
+  assert.ok(view.find({ text: 'Implement sidebar tab for issues' }))
+  assert.equal(view.find({ text: 'Fix branch ordering' }), null)
+
+  await view.select({ role: 'tablist' }, 'prs')
+  await view.settled()
+  await view.type({ label: 'Search pull requests' }, '#10')
+  await view.settled()
+  assert.ok(view.find({ text: 'Add PR support to sidebar' }))
+  await view.unmount()
+})
+
+test('initial RPC connection failure renders an error callout with retry', async () => {
+  let callCount = 0
+  const host = mockHost({
+    requests: {
+      'repo.getContext': () => {
+        callCount++
+        if (callCount === 1) throw new Error('Worker offline')
+        return sampleContext
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+
+  assert.equal(view.find({ text: 'No issues' }), null)
+  assert.ok(view.find({ text: /Worker offline/ }))
+  assert.ok(view.find({ text: 'Retry' }))
+
+  await view.press({ text: 'Retry' })
+  await view.settled()
+  assert.ok(view.find({ text: 'Implement sidebar tab for issues' }))
+  await view.unmount()
+})
+
+test('an unpushed branch card offers to open a PR without rendering a dead link', async () => {
+  const unpushed: RepoContext = {
+    ...sampleContext,
+    currentBranch: 'local-scratch',
+    branches: [{ name: 'local-scratch', isHead: true, lastCommitSubject: 'wip', lastCommitDate: '2026-11-08' }],
+    pullRequests: []
+  }
+  const host = mockHost({ requests: { 'repo.getContext': () => unpushed } })
+  const view = await mount(panel, { host })
+  await view.settled()
+
+  assert.ok(view.find({ text: 'Push the branch first' }))
+  assert.equal(view.find({ type: 'IconButton', label: 'Open on GitHub: Open a pull request' }), null)
   await view.unmount()
 })

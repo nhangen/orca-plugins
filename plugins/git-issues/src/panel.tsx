@@ -33,6 +33,7 @@ import type { GitBranch, GitIssue, GitPullRequest, RepoContext } from './protoco
 // Atoms for state management
 export const repoContext = atom<RepoContext | null>(null)
 export const loading = atom<boolean>(true)
+export const loadError = atom<string | null>(null)
 export const activeTab = atom<string>('activeTab', 'issues', { persist: 'plugin' })
 export const issueFilter = atom<string>('issueFilter', 'open', { persist: 'plugin' })
 export const issueSearch = atom<string>('')
@@ -51,6 +52,8 @@ function currentHint(): string | undefined {
   return read(lastResolvedPath) ?? undefined
 }
 
+let lastAttemptedHint: string | null = null
+
 /** A slower, earlier collect can finish last, so contexts are ordered by when they were requested. */
 function applyContext(data: RepoContext, sentHint = false): void {
   const current = read(repoContext)
@@ -59,23 +62,32 @@ function applyContext(data: RepoContext, sentHint = false): void {
   if (data.resolvedBy === 'terminal' && !data.focusMoved && data.workspacePath) {
     set(lastResolvedPath, data.workspacePath)
   }
-  if (sentHint || !data.ambiguous || data.resolvedBy === 'hint') return
+  if (!data.ambiguous || data.resolvedBy === 'hint') {
+    lastAttemptedHint = null
+    return
+  }
+  if (sentHint) return
   const hint = currentHint()
-  if (hint && hint !== data.workspacePath && (data.candidates ?? []).some((c) => c.path === hint)) {
+  if (hint && hint !== data.workspacePath && hint !== lastAttemptedHint && (data.candidates ?? []).some((c) => c.path === hint)) {
+    lastAttemptedHint = hint
     void plugin
       .request('repo.getContext', { hintPath: hint })
       .then((fresh) => applyContext(fresh, true))
-      .catch(() => {})
+      .catch(() => {
+        lastAttemptedHint = null
+      })
   }
 }
 
 export async function refresh(force = true): Promise<void> {
   set(loading, true)
+  set(loadError, null)
   try {
     const hintPath = currentHint()
+    if (hintPath) lastAttemptedHint = hintPath
     applyContext(await plugin.request('repo.getContext', hintPath ? { forceRefresh: force, hintPath } : { forceRefresh: force }), true)
   } catch (err: any) {
-    // If request fails, keep whatever state exists
+    set(loadError, err?.message || 'Could not connect to repository worker')
   } finally {
     set(loading, false)
   }
@@ -92,6 +104,7 @@ export function setup(ctx: PanelContext): void {
 }
 
 function openUrl(url: string): void {
+  if (!/^https?:\/\//i.test(url)) return
   void shell.openExternal(url)
 }
 
@@ -126,7 +139,7 @@ const KIND_ICON: Record<IssueKind, IconName> = {
 
 const KIND_WORDS: Record<string, IssueKind> = {
   security: 'security', urgent: 'security', critical: 'security', vulnerability: 'security',
-  bug: 'bug', defect: 'bug', regression: 'bug',
+  bug: 'bug', fix: 'bug', defect: 'bug', regression: 'bug',
   feature: 'feature', feat: 'feature', enhancement: 'feature', 'feature request': 'feature',
   idea: 'idea', proposal: 'idea',
   task: 'task', chore: 'task', maintenance: 'task', refactor: 'task',
@@ -196,7 +209,7 @@ function Title(props: { text: string; url?: string; size?: 'xs' | 'sm' }): OrcaN
 /** A list row whose icon opens the same page as its title; ListItem's own icon can't be pressed. */
 function LinkedRow(props: { icon: IconName; url?: string; label: string; current?: boolean; children: OrcaNode }): OrcaNode {
   const { url } = props
-  if (!url) return <ListItem icon={props.icon} current={props.current}>{props.children}</ListItem>
+  if (!url) return <ListItem icon={props.icon} current={props.current}><Stack gap="xs">{props.children}</Stack></ListItem>
   return (
     <ListItem current={props.current}>
       <Row gap="sm" align="start">
@@ -295,6 +308,7 @@ function CurrentBranchCard(props: { data: RepoContext }): OrcaNode {
   const pr = pullRequestFor(data.pullRequests, branch)
   const pushed = Boolean(local?.upstream)
   const treeUrl = local ? branchUrl(data.repoSlug, local) : undefined
+  const prActionUrl = pushed && data.repoSlug ? compareUrl(data.repoSlug, branch) : undefined
   return (
     <Box border radius="md" background="card">
       <List label="Current branch">
@@ -308,8 +322,8 @@ function CurrentBranchCard(props: { data: RepoContext }): OrcaNode {
             <Text size="xs" muted>{`#${pr.number} · ${prStateLabel(pr)}`}</Text>
           </LinkedRow>
         ) : data.repoSlug && !data.prsError ? (
-          <LinkedRow icon="add" url={compareUrl(data.repoSlug, branch)} label="Open a pull request">
-            <Title size="sm" text="Open a pull request" url={compareUrl(data.repoSlug, branch)} />
+          <LinkedRow icon="add" url={prActionUrl} label="Open a pull request">
+            <Title size="sm" text="Open a pull request" url={prActionUrl} />
             <Text size="xs" muted>{pushed ? 'No pull request for this branch' : 'Push the branch first'}</Text>
           </LinkedRow>
         ) : null}
@@ -321,6 +335,7 @@ function CurrentBranchCard(props: { data: RepoContext }): OrcaNode {
 export default function Panel() {
   const data = read(repoContext)
   const isLoading = read(loading)
+  const generalError = read(loadError)
   const currentTab = read(activeTab)
   const currentIssueFilter = read(issueFilter)
   const currentPrFilter = read(prFilter)
@@ -347,7 +362,14 @@ export default function Panel() {
   const filteredIssues = allIssues.filter((issue) => {
     if (currentIssueFilter === 'open' && issue.state !== 'OPEN') return false
     if (currentIssueFilter === 'closed' && issue.state !== 'CLOSED') return false
-    return matches(issueQuery, issue.title, issue.number, issue.author, ...issue.labels.map((l) => l.name))
+    return matches(
+      issueQuery,
+      issue.title,
+      issue.number,
+      `#${issue.number}`,
+      issue.author,
+      ...(issue.labels ?? []).map((l) => l.name)
+    )
   })
 
   const filteredPRs = allPRs.filter((pr) => {
@@ -355,20 +377,21 @@ export default function Panel() {
     if (currentPrFilter === 'draft' && (pr.state !== 'OPEN' || !pr.isDraft)) return false
     if (currentPrFilter === 'merged' && pr.state !== 'MERGED') return false
     if (currentPrFilter === 'closed' && pr.state !== 'CLOSED') return false
-    return matches(prQuery, pr.title, pr.number, pr.author, pr.headRefName)
+    return matches(prQuery, pr.title, pr.number, `#${pr.number}`, pr.author, pr.headRefName)
   })
 
   const filteredBranches = allBranches.filter((branch) => matches(branchQuery, branch.name, branch.lastCommitSubject))
 
-  const repoTitle = data?.repoSlug ?? (data?.workspacePath ? data.workspacePath.split('/').pop() : 'Repository')
+  const repoTitle = data?.repoSlug ?? (data?.workspacePath ? data.workspacePath.split(/[/\\]/).pop() : 'Repository')
   const candidates = data?.candidates ?? []
   const ambiguous = Boolean(data?.ambiguous) && candidates.length > 1
 
   const chooseCandidate = (path: string): void => {
     const choose = async (): Promise<void> => {
       try {
+        const fresh = await plugin.request('repo.chooseWorkspace', { path })
         set(lastResolvedPath, path)
-        applyContext(await plugin.request('repo.chooseWorkspace', { path }), true)
+        applyContext(fresh, true)
       } catch {
         // keep the previous context if the worker cannot answer
       }
@@ -378,10 +401,10 @@ export default function Panel() {
 
   const footer =
     currentTab === 'prs'
-      ? { count: filteredPRs.length, noun: 'pull requests', path: 'pulls' }
+      ? { count: filteredPRs.length, noun: filteredPRs.length === 1 ? 'pull request' : 'pull requests', path: 'pulls' }
       : currentTab === 'branches'
-        ? { count: filteredBranches.length, noun: 'branches', path: 'branches' }
-        : { count: filteredIssues.length, noun: 'issues', path: 'issues' }
+        ? { count: filteredBranches.length, noun: filteredBranches.length === 1 ? 'branch' : 'branches', path: 'branches' }
+        : { count: filteredIssues.length, noun: filteredIssues.length === 1 ? 'issue' : 'issues', path: 'issues' }
 
   return (
     <Stack gap="md">
@@ -438,7 +461,7 @@ export default function Panel() {
             <ListBody
               loading={firstLoad}
               noun="issues"
-              error={data?.issuesError}
+              error={data?.issuesError ?? (data ? null : generalError)}
               count={filteredIssues.length}
               query={issueText.trim()}
               emptyIcon="check"
@@ -485,7 +508,7 @@ export default function Panel() {
             <ListBody
               loading={firstLoad}
               noun="pull requests"
-              error={data?.prsError}
+              error={data?.prsError ?? (data ? null : generalError)}
               count={filteredPRs.length}
               query={prText.trim()}
               emptyIcon="branch"
@@ -524,7 +547,7 @@ export default function Panel() {
             <ListBody
               loading={firstLoad}
               noun="branches"
-              error={data?.branchesError}
+              error={data?.branchesError ?? (data ? null : generalError)}
               count={filteredBranches.length}
               query={branchText.trim()}
               emptyIcon="branch"
