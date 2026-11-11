@@ -516,50 +516,200 @@ test('a focused terminal Orca never tied to a workspace leaves the picker in pla
   }
 ))
 
+const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
+type OrcaRunner = (cli: string, args: string[]) => Promise<{ stdout: string }>
+const missingBinary = (): Error => Object.assign(new Error('spawn orca ENOENT'), { code: 'ENOENT' })
+const noOrca: OrcaRunner = async () => {
+  throw missingBinary()
+}
+main.testHooks.execOrca = noOrca
+
+/** Answers only `orca terminal show --terminal=<id> --json`; any other argv fails the call loudly. */
+function terminalShowStub(answers: Record<string, () => Promise<{ stdout: string }>>, calls: string[][]): OrcaRunner {
+  return async (cli, args) => {
+    calls.push([cli, ...args])
+    const flag = args.length === 4 && args[0] === 'terminal' && args[1] === 'show' && args[3] === '--json'
+      ? /^--terminal=(.+)$/.exec(args[2])
+      : null
+    if (!flag) throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    const answer = answers[flag[1]]
+    if (!answer) throw new Error(`unexpected terminal ${flag[1]}`)
+    return answer()
+  }
+}
+const showPath = (path: string) => async () => ({
+  stdout: JSON.stringify({ ok: true, result: { terminal: { handle: 'term-1', worktreeId: `repo::${path}`, worktreePath: path } } })
+})
+const showStale = async (): Promise<{ stdout: string }> => {
+  throw Object.assign(new Error('Command failed: orca terminal show'), {
+    code: 1,
+    stdout: JSON.stringify({ ok: false, error: { code: 'terminal_handle_stale', message: 'stale' } })
+  })
+}
+const showTimeout = async (): Promise<{ stdout: string }> => {
+  throw Object.assign(new Error('Command failed: orca terminal show'), { killed: true, signal: 'SIGTERM', stdout: '' })
+}
+
+async function withOrca(runner: OrcaRunner, run: () => Promise<void>): Promise<void> {
+  main.testHooks.execOrca = runner
+  try {
+    await run()
+  } finally {
+    main.testHooks.execOrca = noOrca
+  }
+}
+
+const sameNameHost = (paths: string[], terminals: { id: string }[] = [{ id: 'term-1' }]) => {
+  const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+  return mockHost({
+    capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+    results: {
+      'workspace.readContext': { branch: 'main', displayName: 'main', terminals },
+      'workspace.list': { workspaces: paths.map(entry), truncated: false }
+    }
+  })
+}
+
 test('a focused terminal resolved through the orca CLI join ends the ambiguity', withTempWorkspaces(
   ['wb-alice', 'wb-bob'],
   async ([alice, bob]) => {
-    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
-    const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
-      results: {
-        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-1' }] },
-        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false }
-      }
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showPath(bob) }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.ok(!context.ambiguous)
+      assert.equal(context.workspacePath, bob)
+      assert.deepEqual(calls, [[APP_ORCA, 'terminal', 'show', '--terminal=term-1', '--json']])
+      await worker.deactivate()
     })
-    const worker = await mountWorker(main, { host })
-    const before = (await worker.request('repo.getContext')) as any
-    assert.ok(before.ambiguous)
-    main.testHooks.lookupFocusedPath = async () => bob
-    const after = (await worker.request('repo.getContext')) as any
-    assert.ok(!after.ambiguous)
-    assert.equal(after.workspacePath, bob)
-    main.testHooks.lookupFocusedPath = async () => null
-    const fallback = (await worker.request('repo.getContext')) as any
-    assert.ok(fallback.ambiguous)
-    main.testHooks.lookupFocusedPath = null
-    await worker.deactivate()
+  }
+))
+
+test('a stale terminal handle is a cached miss that keeps the picker', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showStale }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const first = (await worker.request('repo.getContext')) as any
+      assert.ok(first.ambiguous)
+      assert.equal(first.workspacePath, alice)
+      const second = (await worker.request('repo.getContext')) as any
+      assert.ok(second.ambiguous)
+      assert.equal(calls.length, 1)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a timed-out CLI lookup is not cached and is retried on the next collect', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    let answer = showTimeout
+    await withOrca(terminalShowStub({ 'term-1': () => answer() }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const first = (await worker.request('repo.getContext')) as any
+      assert.ok(first.ambiguous)
+      assert.equal(calls.length, 1)
+      answer = showPath(bob)
+      const second = (await worker.request('repo.getContext')) as any
+      assert.ok(!second.ambiguous)
+      assert.equal(second.workspacePath, bob)
+      assert.equal(calls.length, 2)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('output that is not JSON is not cached either', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': async () => ({ stdout: 'Orca is starting...' }) }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+      assert.equal(calls.length, 2)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('the bundled CLI is tried first and a bare orca on PATH only when it is missing', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    const show = terminalShowStub({ 'term-1': showPath(bob) }, calls)
+    const runner: OrcaRunner = async (cli, args) => {
+      if (cli === APP_ORCA) {
+        calls.push([cli, ...args])
+        throw missingBinary()
+      }
+      return show(cli, args)
+    }
+    await withOrca(runner, async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.equal(context.workspacePath, bob)
+      assert.deepEqual(calls.map((c) => c[0]), [APP_ORCA, 'orca'])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a CLI that runs but fails does not fall through to a bare orca on PATH', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showTimeout }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      await worker.request('repo.getContext')
+      assert.deepEqual(calls.map((c) => c[0]), [APP_ORCA])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a unique match never spawns the orca CLI', withTempWorkspaces(
+  ['wb-alice'],
+  async ([alice]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({}, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.equal(context.workspacePath, alice)
+      assert.deepEqual(calls, [])
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a terminal id shaped like a flag never reaches the orca CLI', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({}, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob], [{ id: '--host=evil' }]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.ok(context.ambiguous)
+      assert.deepEqual(calls, [])
+      await worker.deactivate()
+    })
   }
 ))
 
 test('a focused terminal whose CLI-joined path is outside the candidates stays ambiguous', withTempWorkspaces(
   ['wb-alice', 'wb-bob'],
   async ([alice, bob]) => {
-    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
-    const host = mockHost({
-      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
-      results: {
-        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-1' }] },
-        'workspace.list': { workspaces: [entry(alice), entry(bob)], truncated: false }
-      }
+    const calls: string[][] = []
+    await withOrca(terminalShowStub({ 'term-1': showPath('/somewhere/else') }, calls), async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await worker.request('repo.getContext')) as any
+      assert.ok(context.ambiguous)
+      assert.equal(context.workspacePath, alice)
+      await worker.deactivate()
     })
-    const worker = await mountWorker(main, { host })
-    main.testHooks.lookupFocusedPath = async () => '/somewhere/else'
-    const context = (await worker.request('repo.getContext')) as any
-    assert.ok(context.ambiguous)
-    assert.equal(context.workspacePath, alice)
-    main.testHooks.lookupFocusedPath = null
-    await worker.deactivate()
   }
 ))
 

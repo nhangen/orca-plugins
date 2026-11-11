@@ -30,6 +30,8 @@ export interface WorkerState {
   terminalOwners: Map<string, string>
   /** terminalId → workspace path resolved through the Orca CLI; terminal ids are stable per incarnation. */
   focusedPathCache: Map<string, string | null>
+  /** One CLI spawn per handle at a time; concurrent collects share it. */
+  focusedPathLookups: Map<string, Promise<string | null>>
 }
 
 export function createWorkerState(): WorkerState {
@@ -40,7 +42,8 @@ export function createWorkerState(): WorkerState {
     epoch: randomUUID(),
     choicesQueue: Promise.resolve(),
     terminalOwners: new Map(),
-    focusedPathCache: new Map()
+    focusedPathCache: new Map(),
+    focusedPathLookups: new Map()
   }
 }
 
@@ -98,36 +101,71 @@ async function pruneChoices(orca: OrcaWorkerApi, state: WorkerState): Promise<vo
   }
 }
 
-const ORCA_CLI_CANDIDATES = ['orca', '/Applications/Orca.app/Contents/Resources/bin/orca']
+// The app's own CLI first: a bare `orca` on PATH can be an unrelated program (the GNOME screen
+// reader, Plotly's image exporter), so it is only tried when the bundled binary does not exist.
+const ORCA_CLI_CANDIDATES = ['/Applications/Orca.app/Contents/Resources/bin/orca', 'orca']
+const TERMINAL_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/
+const CACHE_LIMIT = 100
+
+function rememberBounded<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key)
+  if (map.size >= CACHE_LIMIT) map.delete(map.keys().next().value as string)
+  map.set(key, value)
+}
+
+/** A path, null for a definitive answer without one (stale handle, remote terminal), undefined when unreadable. */
+function parseTerminalShow(stdout: string): string | null | undefined {
+  let parsed: { ok?: unknown; result?: { terminal?: { worktreePath?: unknown } } }
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    return undefined
+  }
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.ok !== 'boolean') return undefined
+  const path = parsed.ok ? parsed.result?.terminal?.worktreePath : null
+  return typeof path === 'string' && path.length > 0 ? path : null
+}
+
+function runOrca(cli: string, args: string[]): Promise<{ stdout: string }> {
+  if (testHooks.execOrca) return testHooks.execOrca(cli, args)
+  return exec(cli, args, { env: EXEC_ENV, timeout: 5000, maxBuffer: 512 * 1024 })
+}
 
 /**
- * Maps a focused terminal id to its workspace path via `orca terminal show`. Not part of the
+ * Maps a focused terminal handle to its workspace path via `orca terminal show`. Not part of the
  * plugin contract (the JSON shape could change), so every failure degrades to null and the
- * resolution falls back to agent-event correlation, the stored pick, or the picker.
+ * resolution falls back to agent-event correlation, the stored pick, or the picker. Only parsed
+ * answers are cached: a timeout or a CLI that is still starting is retried on the next collect.
+ * The command also returns a terminal preview; it is parsed in memory and never logged or kept.
  */
-async function lookupFocusedPath(state: WorkerState, terminalId: string): Promise<string | null> {
+function lookupFocusedPath(state: WorkerState, terminalId: string): Promise<string | null> {
+  if (!TERMINAL_HANDLE.test(terminalId)) return Promise.resolve(null)
   const cached = state.focusedPathCache.get(terminalId)
-  if (cached !== undefined) return cached
-  let result: string | null = null
+  if (cached !== undefined) return Promise.resolve(cached)
+  const pending = state.focusedPathLookups.get(terminalId)
+  if (pending) return pending
+  const lookup = queryTerminalPath(state, terminalId).finally(() => state.focusedPathLookups.delete(terminalId))
+  state.focusedPathLookups.set(terminalId, lookup)
+  return lookup
+}
+
+async function queryTerminalPath(state: WorkerState, terminalId: string): Promise<string | null> {
   for (const cli of ORCA_CLI_CANDIDATES) {
+    let stdout: string
     try {
-      const { stdout } = await exec(cli, ['terminal', 'show', '--terminal', terminalId, '--json'], {
-        env: EXEC_ENV,
-        timeout: 5000
-      })
-      const parsed = JSON.parse(stdout) as { ok?: boolean; result?: { worktreePath?: unknown; terminal?: { worktreePath?: unknown } } }
-      const path = parsed?.result?.terminal?.worktreePath ?? parsed?.result?.worktreePath
-      if (typeof path === 'string' && path.length > 0) {
-        result = path
-        break
-      }
-    } catch {
-      // try the next CLI location
+      ;({ stdout } = await runOrca(cli, ['terminal', 'show', `--terminal=${terminalId}`, '--json']))
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') continue
+      // A stale handle exits 1 with its JSON answer on stdout.
+      if (typeof err?.stdout !== 'string' || err.stdout.length === 0) return null
+      stdout = err.stdout
     }
+    const path = parseTerminalShow(stdout)
+    if (path === undefined) return null
+    rememberBounded(state.focusedPathCache, terminalId, path)
+    return path
   }
-  if (state.focusedPathCache.size >= 100) state.focusedPathCache.clear()
-  state.focusedPathCache.set(terminalId, result)
-  return result
+  return null
 }
 
 const EXEC_ENV = {
@@ -480,16 +518,16 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     if (context?.branch) activeBranch = stripRef(context.branch)
     const list = await orca.host.call('workspace.list')
     const workspaces = (list?.workspaces ?? []) as WorkspaceEntry[]
-    let focusedPath: string | null = null
-    const focusedTerminalIds = (Array.isArray(context?.terminals) ? context.terminals : [])
-      .map((t) => (typeof t?.id === 'string' ? t.id : ''))
-      .filter(Boolean)
-    for (const id of focusedTerminalIds.slice(0, 3)) {
-      focusedPath = await (testHooks.lookupFocusedPath ?? lookupFocusedPath)(state, id)
-      if (focusedPath) break
-    }
-    let resolution = resolveWorkspace(context, workspaces, state.sessionChoices, state.terminalOwners, focusedPath)
+    let resolution = resolveWorkspace(context, workspaces, state.sessionChoices, state.terminalOwners)
     if (resolution.ambiguous) {
+      let focusedPath: string | null = null
+      const focusedTerminalIds = (Array.isArray(context?.terminals) ? context.terminals : [])
+        .map((t) => (typeof t?.id === 'string' ? t.id : ''))
+        .filter(Boolean)
+      for (const id of focusedTerminalIds.slice(0, 3)) {
+        focusedPath = await lookupFocusedPath(state, id)
+        if (focusedPath) break
+      }
       await pruneChoices(orca, state)
       resolution = resolveWorkspace(context, workspaces, await readChoices(orca, state), state.terminalOwners, focusedPath)
       contextCandidates = resolution.candidates
@@ -578,8 +616,8 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
 export const testHooks: {
   beforePublish: ((context: RepoContext) => Promise<void>) | null
   afterChoicesRead: (() => Promise<void>) | null
-  lookupFocusedPath: ((state: WorkerState, terminalId: string) => Promise<string | null>) | null
-} = { beforePublish: null, afterChoicesRead: null, lookupFocusedPath: null }
+  execOrca: ((cli: string, args: string[]) => Promise<{ stdout: string }>) | null
+} = { beforePublish: null, afterChoicesRead: null, execOrca: null }
 
 async function publish(orca: OrcaWorkerApi, state: WorkerState, context: RepoContext): Promise<RepoContext> {
   if (testHooks.beforePublish) await testHooks.beforePublish(context)
