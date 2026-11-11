@@ -474,6 +474,28 @@ test('a learned agent terminal identifies the focused workspace without a picker
   }
 ))
 
+test('learned terminal owners are bounded, oldest first', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string, id: string) => ({ id, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-bob' }] },
+        'workspace.list': { workspaces: [entry(alice, 'w-alice'), entry(bob, 'w-bob')], truncated: false }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    await worker.emit('agent.status.changed', { workspaceId: 'w-bob', terminalId: 'term-bob', paneKey: 'p1', state: 'working', receivedAt: 1 })
+    assert.equal(((await worker.request('repo.getContext')) as any).workspacePath, bob)
+    for (let i = 0; i < 100; i++) {
+      await worker.emit('agent.status.changed', { workspaceId: 'w-alice', terminalId: `term-${i}`, paneKey: `p${i}`, state: 'working', receivedAt: 2 + i })
+    }
+    assert.ok(((await worker.request('repo.getContext')) as any).ambiguous)
+    await worker.deactivate()
+  }
+))
+
 test('a terminal owned by a workspace outside the branch+name matches is ignored', withTempWorkspaces(
   ['wb-alice', 'wb-bob'],
   async ([alice, bob]) => {
@@ -708,6 +730,96 @@ test('a focused terminal whose CLI-joined path is outside the candidates stays a
       const context = (await worker.request('repo.getContext')) as any
       assert.ok(context.ambiguous)
       assert.equal(context.workspacePath, alice)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a locker hint among the candidates is shown preselected without writing a pick', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const host = sameNameHost([alice, bob])
+    const worker = await mountWorker(main, { host })
+    const context = (await worker.request('repo.getContext', { hintPath: bob })) as any
+    assert.equal(context.workspacePath, bob)
+    assert.equal(context.resolvedBy, 'hint')
+    assert.ok(context.ambiguous)
+    assert.deepEqual(context.candidates.map((c: any) => c.path), [alice, bob])
+    assert.equal(host.data().storage.workspaceChoices, undefined)
+    const plain = (await worker.request('repo.getContext')) as any
+    assert.equal(plain.workspacePath, alice)
+    assert.equal(plain.resolvedBy, null)
+    await worker.deactivate()
+  }
+))
+
+test('a locker hint beats the pick shared across same-name workspaces', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+    const picked = (await worker.request('repo.chooseWorkspace', { path: bob })) as any
+    assert.equal(picked.workspacePath, bob)
+    assert.equal(picked.resolvedBy, 'pick')
+    const hinted = (await worker.request('repo.getContext', { hintPath: alice })) as any
+    assert.equal(hinted.workspacePath, alice)
+    assert.equal(hinted.resolvedBy, 'hint')
+    await worker.deactivate()
+  }
+))
+
+test('a locker hint outside the candidates is ignored', withTempWorkspaces(
+  ['wb-alice', 'wb-bob', 'wb-carol'],
+  async ([alice, bob, carol]) => {
+    const worker = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+    const context = (await worker.request('repo.getContext', { hintPath: carol })) as any
+    assert.equal(context.workspacePath, alice)
+    assert.notEqual(context.resolvedBy, 'hint')
+    await worker.deactivate()
+  }
+))
+
+test('contexts say which signal resolved them', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const unique = await mountWorker(main, { host: sameNameHost([alice]) })
+    assert.equal(((await unique.request('repo.getContext')) as any).resolvedBy, 'unique')
+    await unique.deactivate()
+    await withOrca(terminalShowStub({ 'term-1': showPath(bob) }, []), async () => {
+      const joined = await mountWorker(main, { host: sameNameHost([alice, bob]) })
+      const context = (await joined.request('repo.getContext')) as any
+      assert.equal(context.resolvedBy, 'terminal')
+      assert.equal(context.focusMoved, false)
+      await joined.deactivate()
+    })
+  }
+))
+
+test('a context reports when the focus moved while it was being collected', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const entry = (path: string) => ({ id: path, kind: 'worktree', name: 'main', path, branch: 'main', hostId: null })
+    let terminals = [{ id: 'term-1' }]
+    let moveDuringList = false
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': () => ({ branch: 'main', displayName: 'main', terminals }),
+        'workspace.list': () => {
+          if (moveDuringList) {
+            moveDuringList = false
+            terminals = [{ id: 'term-2' }]
+          }
+          return { workspaces: [entry(alice), entry(bob)], truncated: false }
+        }
+      }
+    })
+    await withOrca(terminalShowStub({ 'term-1': showPath(bob), 'term-2': showPath(alice) }, []), async () => {
+      const worker = await mountWorker(main, { host })
+      assert.equal(((await worker.request('repo.getContext')) as any).focusMoved, false)
+      moveDuringList = true
+      const moved = (await worker.request('repo.getContext')) as any
+      assert.equal(moved.workspacePath, bob)
+      assert.equal(moved.focusMoved, true)
       await worker.deactivate()
     })
   }

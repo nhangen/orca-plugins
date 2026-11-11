@@ -5,16 +5,16 @@ import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { JsonValue } from 'orca/host'
-import type { GitBranch, GitIssue, GitPullRequest, RepoCandidate, RepoContext } from './protocol'
+import type { GitBranch, GitIssue, GitPullRequest, RepoCandidate, RepoContext, ResolvedBy } from './protocol'
 
 const exec = promisify(execFile)
 const STORAGE_KEY = 'latestContext'
 // Orca reports the focused workspace as {branch, displayName, terminalIds} only, and names every
 // root clone after its branch, so separate repos on their default branch are indistinguishable by
-// branch+name. Two ways out: the user's pick, stored per branch+name key, or the terminal
-// correlation below, which identifies the focused workspace exactly when an agent terminal has
-// reported status at least once (agent.status.changed carries both terminalId and workspaceId,
-// while readContext only carries the focused workspace's terminal ids).
+// branch+name. In order, the ways out: a focused terminal joined to its worktree through the orca
+// CLI; a terminal an agent.status.changed event tied to a workspace; the panel's per-workspace
+// hint; and last, the user's pick, stored per branch+name key and so shared by every workspace
+// that key matches.
 const CHOICES_KEY = 'workspaceChoices'
 
 export interface WorkerState {
@@ -400,8 +400,7 @@ export interface WorkspaceResolution {
   activeBranch: string | null
   key: string
   ambiguous: boolean
-  /** True when the focus was identified through terminal correlation instead of the user's pick. */
-  focusedByTerminal?: boolean
+  resolvedBy: ResolvedBy
   candidates: RepoCandidate[]
 }
 
@@ -436,14 +435,15 @@ export function resolveWorkspace(
   workspaces: WorkspaceEntry[],
   choices: Map<string, string>,
   terminalOwners: Map<string, string> = new Map(),
-  focusedPath: string | null = null
+  focusedPath: string | null = null,
+  hintPath: string | null = null
 ): WorkspaceResolution {
   const activeBranch = context?.branch ? stripRef(context.branch) : null
   const displayName = context?.displayName ?? null
   const key = choiceKey(activeBranch, displayName)
   const pool = workspaces.filter((w) => Boolean(w.path) && isLocalWorkspace(w))
   if (pool.length === 0) {
-    return { workspacePath: null, activeBranch, key, ambiguous: false, candidates: [] }
+    return { workspacePath: null, activeBranch, key, ambiguous: false, resolvedBy: null, candidates: [] }
   }
 
   const onBranch = activeBranch != null ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch) : []
@@ -453,42 +453,55 @@ export function resolveWorkspace(
   const namedFolders = named.filter((w) => w.branch == null)
   const matches = [both, namedFolders, onBranch, named].find((list) => list.length > 0) ?? []
   if (matches.length === 0) {
-    return { workspacePath: null, activeBranch, key, ambiguous: false, candidates: [] }
+    return { workspacePath: null, activeBranch, key, ambiguous: false, resolvedBy: null, candidates: [] }
   }
 
   if (matches.length === 1) {
-    return { workspacePath: matches[0].path, activeBranch, key, ambiguous: false, candidates: [] }
+    return { workspacePath: matches[0].path, activeBranch, key, ambiguous: false, resolvedBy: 'unique', candidates: [] }
   }
 
   if (focusedPath && matches.some((w) => w.path === focusedPath)) {
-    return { workspacePath: focusedPath, activeBranch, key, ambiguous: false, focusedByTerminal: true, candidates: [] }
+    return { workspacePath: focusedPath, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
   }
 
   const focused = focusedWorkspace(context, workspaces, terminalOwners)
   if (focused && matches.some((w) => w.path === focused.path)) {
-    return { workspacePath: focused.path, activeBranch, key, ambiguous: false, focusedByTerminal: true, candidates: [] }
+    return { workspacePath: focused.path, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
   }
 
-  const fallback = matches[0]
-  const preferred = choices.get(key)
+  // A hint or a pick is a guess about which workspace is focused, so the picker stays up to correct it.
   const labels = candidateLabels(matches.map((w) => w.path))
+  const candidates = matches.map((w, i) => ({ path: w.path, name: labels[i] }))
+  const hinted = hintPath ? matches.find((w) => w.path === hintPath) : undefined
+  if (hinted) {
+    return { workspacePath: hinted.path, activeBranch, key, ambiguous: true, resolvedBy: 'hint', candidates }
+  }
+  const picked = matches.find((w) => w.path === choices.get(key))
   return {
-    workspacePath: matches.find((w) => w.path === preferred)?.path ?? fallback.path,
+    workspacePath: (picked ?? matches[0]).path,
     activeBranch,
     key,
     ambiguous: true,
-    candidates: matches.map((w, i) => ({ path: w.path, name: labels[i] }))
+    resolvedBy: picked ? 'pick' : null,
+    candidates
   }
 }
 
-/** The workspace a focused terminal belongs to, when agent events have tied its terminal to one. */
 function recordTerminalOwner(state: WorkerState, payload: unknown): void {
   const event = payload as { workspaceId?: unknown; terminalId?: unknown } | null
   if (typeof event?.workspaceId === 'string' && typeof event.terminalId === 'string' && event.terminalId.length > 0) {
-    state.terminalOwners.set(event.terminalId, event.workspaceId)
+    rememberBounded(state.terminalOwners, event.terminalId, event.workspaceId)
   }
 }
 
+function focusKey(context: FocusedContext | null): string {
+  const ids = (Array.isArray(context?.terminals) ? context.terminals : [])
+    .map((t) => (typeof t?.id === 'string' ? t.id : ''))
+    .sort()
+  return JSON.stringify([context?.branch ?? null, context?.displayName ?? null, ids])
+}
+
+/** The workspace a focused terminal belongs to, when agent events have tied its terminal to one. */
 function focusedWorkspace(
   context: FocusedContext | null,
   workspaces: WorkspaceEntry[],
@@ -504,17 +517,25 @@ function focusedWorkspace(
   return null
 }
 
-export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState = createWorkerState()): Promise<RepoContext> {
+export async function collectRepoContext(
+  orca: OrcaWorkerApi,
+  state: WorkerState = createWorkerState(),
+  options: { hintPath?: string | null } = {}
+): Promise<RepoContext> {
   const requestedAt = Math.max(Date.now(), state.lastRequestedAt + 1)
   state.lastRequestedAt = requestedAt
   let workspacePath: string | null = null
   let activeBranch: string | null = null
   let contextCandidates: RepoCandidate[] | undefined
   let ambiguous = false
+  let resolvedBy: ResolvedBy = null
+  let startFocus: string | null = null
   let resolveError: string | null = null
+  const hintPath = typeof options.hintPath === 'string' && options.hintPath.length > 0 ? options.hintPath : null
 
   try {
     const context = await orca.host.call('workspace.readContext')
+    startFocus = focusKey(context)
     if (context?.branch) activeBranch = stripRef(context.branch)
     const list = await orca.host.call('workspace.list')
     const workspaces = (list?.workspaces ?? []) as WorkspaceEntry[]
@@ -529,11 +550,12 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
         if (focusedPath) break
       }
       await pruneChoices(orca, state)
-      resolution = resolveWorkspace(context, workspaces, await readChoices(orca, state), state.terminalOwners, focusedPath)
+      resolution = resolveWorkspace(context, workspaces, await readChoices(orca, state), state.terminalOwners, focusedPath, hintPath)
       contextCandidates = resolution.candidates
     }
     workspacePath = resolution.workspacePath
     ambiguous = resolution.ambiguous
+    resolvedBy = resolution.resolvedBy
   } catch (err: any) {
     resolveError = `Could not read Orca workspaces: ${err?.message || String(err)}`
     console.error('git-issues: could not resolve the focused workspace:', err?.message || String(err))
@@ -592,6 +614,15 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
 
   const currentBranch = detectedHead ?? activeBranch
 
+  let focusMoved = true
+  if (startFocus !== null) {
+    try {
+      focusMoved = focusKey(await orca.host.call('workspace.readContext')) !== startFocus
+    } catch {
+      // unreadable now, so this context cannot vouch for the current focus
+    }
+  }
+
   const result: RepoContext = {
     repoSlug,
     currentBranch,
@@ -606,7 +637,9 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     requestedAt,
     workerEpoch: state.epoch,
     ambiguous,
-    candidates: contextCandidates
+    candidates: contextCandidates,
+    resolvedBy,
+    focusMoved
   }
 
   return result
@@ -637,8 +670,9 @@ async function publish(orca: OrcaWorkerApi, state: WorkerState, context: RepoCon
 export default function activate(orca: OrcaWorkerApi): void {
   const state = createWorkerState()
 
-  orca.panels.handle('repo.getContext', async () => {
-    const context = await collectRepoContext(orca, state)
+  orca.panels.handle('repo.getContext', async (input: { hintPath?: unknown } | undefined) => {
+    const hintPath = typeof input?.hintPath === 'string' ? input.hintPath : null
+    const context = await collectRepoContext(orca, state, { hintPath })
     return publish(orca, state, context)
   })
 

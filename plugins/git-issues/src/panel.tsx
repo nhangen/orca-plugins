@@ -37,27 +37,30 @@ export const prSearch = atom<string>('')
 export const branchSearch = atom<string>('')
 
 /**
- * The path this workspace was last resolved to, persisted per workspace by Orca itself. When the
- * worker reports an ambiguous context, this locker entry tells the panel which candidate this
- * workspace is, so no picker is needed for a workspace we have resolved before.
+ * The path this workspace was last resolved to, persisted per workspace by Orca itself: written
+ * when a focused terminal identified the workspace or the user picked one, and sent back to the
+ * worker as a hint that preselects the picker when the focus is ambiguous again.
  */
 export const lastResolvedPath = atom<string | null>('lastResolvedPath', null, { persist: 'workspace' })
 
+function currentHint(): string | undefined {
+  return read(lastResolvedPath) ?? undefined
+}
+
 /** A slower, earlier collect can finish last, so contexts are ordered by when they were requested. */
-function applyContext(data: RepoContext): void {
+function applyContext(data: RepoContext, sentHint = false): void {
   const current = read(repoContext)
-  if (!current || data.workerEpoch !== current.workerEpoch || data.requestedAt >= current.requestedAt) {
-    set(repoContext, data)
-  }
-  if (data.workspacePath && !data.ambiguous) {
+  if (current && data.workerEpoch === current.workerEpoch && data.requestedAt < current.requestedAt) return
+  set(repoContext, data)
+  if (data.resolvedBy === 'terminal' && !data.focusMoved && data.workspacePath) {
     set(lastResolvedPath, data.workspacePath)
   }
-  const hint = read(lastResolvedPath)
-  const candidates = data.candidates ?? []
-  if (data.ambiguous && hint && hint !== data.workspacePath && candidates.some((c) => c.path === hint)) {
+  if (sentHint || !data.ambiguous || data.resolvedBy === 'hint') return
+  const hint = currentHint()
+  if (hint && hint !== data.workspacePath && (data.candidates ?? []).some((c) => c.path === hint)) {
     void plugin
-      .request('repo.chooseWorkspace', { path: hint })
-      .then((fresh) => applyContext(fresh as RepoContext))
+      .request('repo.getContext', { hintPath: hint })
+      .then((fresh) => applyContext(fresh, true))
       .catch(() => {})
   }
 }
@@ -65,7 +68,8 @@ function applyContext(data: RepoContext): void {
 export async function refresh(force = true): Promise<void> {
   set(loading, true)
   try {
-    applyContext(await plugin.request('repo.getContext', { forceRefresh: force }))
+    const hintPath = currentHint()
+    applyContext(await plugin.request('repo.getContext', hintPath ? { forceRefresh: force, hintPath } : { forceRefresh: force }), true)
   } catch (err: any) {
     // If request fails, keep whatever state exists
   } finally {
@@ -147,7 +151,8 @@ export default function Panel() {
   const chooseCandidate = (path: string): void => {
     const choose = async (): Promise<void> => {
       try {
-        applyContext(await plugin.request('repo.chooseWorkspace', { path }))
+        set(lastResolvedPath, path)
+        applyContext(await plugin.request('repo.chooseWorkspace', { path }), true)
       } catch {
         // keep the previous context if the worker cannot answer
       }
