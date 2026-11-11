@@ -35,7 +35,7 @@
       {
         "id": "git-issues",
         "title": "Git Issues, PRs & Branches",
-        "icon": "branch",
+        "icon": "bug",
         "entry": "src/panel.tsx",
         "ui": "components"
       }

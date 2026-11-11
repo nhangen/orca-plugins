@@ -73,6 +73,17 @@ Yes. The plugin parses standard HTTPS remotes (`https://github.com/owner/repo.gi
 - `workspace:read`: Used to read the active workspace directory path and branch name to query git status.
 - `storage:own`: Used to cache repository issues and pull requests locally to minimize network latency and API requests.
 
+### Why does the panel show the wrong repo when several main clones are on `main`?
+Orca's plugin API reports the focused workspace as `{branch, displayName}` only — no path or workspace id — and Orca names every root clone after its checked-out branch (`main`). When two or more local repositories sit on the same branch with the same name, the plugin cannot tell which one you focused, so the panel shows a **workspace picker at the top**. Choose your repo and the pick is remembered for that branch + name, across worker restarts.
+
+The pick is shared by every workspace with that branch and name: after you pick `claude-ceo`, focusing another `main`/`main` clone still shows `claude-ceo` until you pick again. To make a clone resolve on its own, give its workspace a unique name in Orca; a unique name on the shared branch matches exactly and needs no picker.
+
+### What if I rename a workspace later?
+A renamed workspace with a unique name resolves directly. If the new name is shared too, the pick is keyed by the new branch + name, so pick again once.
+
+### Does the panel see workspaces on remote hosts?
+No. `workspace.list` spans every host Orca reaches, but the plugin only runs `git` and `gh` on this machine, so it ignores workspaces whose `hostId` names a remote host. Orca does not say which host the focused workspace is on, so focusing a remote workspace shows the local repo with the same branch or name. If no local repo matches, the panel says so and shows nothing.
+
 ## Architecture
 
 This plugin uses the `worker-panel` pattern:

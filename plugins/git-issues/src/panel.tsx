@@ -14,6 +14,7 @@ import {
   read,
   RelativeTime,
   Row,
+  Select,
   set,
   shell,
   Spinner,
@@ -35,11 +36,18 @@ export const prFilter = atom<string>('prFilter', 'open', { persist: 'plugin' })
 export const prSearch = atom<string>('')
 export const branchSearch = atom<string>('')
 
+/** A slower, earlier collect can finish last, so contexts are ordered by when they were requested. */
+function applyContext(data: RepoContext): void {
+  const current = read(repoContext)
+  if (!current || data.workerEpoch !== current.workerEpoch || data.requestedAt >= current.requestedAt) {
+    set(repoContext, data)
+  }
+}
+
 export async function refresh(force = true): Promise<void> {
   set(loading, true)
   try {
-    const data = await plugin.request('repo.getContext', { forceRefresh: force })
-    set(repoContext, data)
+    applyContext(await plugin.request('repo.getContext', { forceRefresh: force }))
   } catch (err: any) {
     // If request fails, keep whatever state exists
   } finally {
@@ -50,7 +58,7 @@ export async function refresh(force = true): Promise<void> {
 export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(
     plugin.on('repo.changed', (data) => {
-      set(repoContext, data)
+      applyContext(data)
       set(loading, false)
     })
   )
@@ -115,6 +123,20 @@ export default function Panel() {
 
   const repoTitle = data?.repoSlug ?? (data?.workspacePath ? data.workspacePath.split('/').pop() : 'Repository')
 
+  const candidates = data?.candidates ?? []
+  const ambiguous = Boolean(data?.ambiguous) && candidates.length > 1
+
+  const chooseCandidate = (path: string): void => {
+    const choose = async (): Promise<void> => {
+      try {
+        applyContext(await plugin.request('repo.chooseWorkspace', { path }))
+      } catch {
+        // keep the previous context if the worker cannot answer
+      }
+    }
+    void choose()
+  }
+
   return (
     <Stack gap="md">
       {/* Header */}
@@ -140,6 +162,16 @@ export default function Panel() {
           disabled={isLoading}
         />
       </Row>
+
+      {/* Ambiguous workspace picker: several repos share this branch and name. */}
+      {ambiguous ? (
+        <Select
+          label={`Orca doesn't say which local workspace on ${data?.currentBranch ?? 'this branch'} is focused. Your pick applies to every workspace with this branch and name.`}
+          value={data?.workspacePath ?? undefined}
+          options={candidates.map((c) => ({ value: c.path, label: c.name }))}
+          onChange={chooseCandidate}
+        />
+      ) : null}
 
       {/* Tabs */}
       <Tabs label="Views" value={currentTab} onChange={(t) => set(activeTab, t)}>
