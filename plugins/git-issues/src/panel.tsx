@@ -189,7 +189,7 @@ export default function Panel() {
       {/* Ambiguous workspace picker: several repos share this branch and name. */}
       {ambiguous ? (
         <Select
-          label={`Orca doesn't say which local workspace on ${data?.currentBranch ?? 'this branch'} is focused. Your pick applies to every workspace with this branch and name.`}
+          label={`Orca doesn't say which local workspace on ${data?.currentBranch ?? 'this branch'} is focused. Your pick is remembered for this workspace, and for others with this branch and name that have none of their own.`}
           value={data?.workspacePath ?? undefined}
           options={candidates.map((c) => ({ value: c.path, label: c.name }))}
           onChange={chooseCandidate}
