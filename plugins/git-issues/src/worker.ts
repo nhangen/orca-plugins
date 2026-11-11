@@ -9,9 +9,12 @@ import type { GitBranch, GitIssue, GitPullRequest, RepoCandidate, RepoContext } 
 
 const exec = promisify(execFile)
 const STORAGE_KEY = 'latestContext'
-// Orca reports the focused workspace as {branch, displayName} only, and names every root clone after
-// its branch, so separate repos on their default branch are indistinguishable; the user's pick for
-// such a context is stored per branch+name key.
+// Orca reports the focused workspace as {branch, displayName, terminalIds} only, and names every
+// root clone after its branch, so separate repos on their default branch are indistinguishable by
+// branch+name. Two ways out: the user's pick, stored per branch+name key, or the terminal
+// correlation below, which identifies the focused workspace exactly when an agent terminal has
+// reported status at least once (agent.status.changed carries both terminalId and workspaceId,
+// while readContext only carries the focused workspace's terminal ids).
 const CHOICES_KEY = 'workspaceChoices'
 
 export interface WorkerState {
@@ -23,6 +26,10 @@ export interface WorkerState {
   epoch: string
   /** Serializes CHOICES_KEY read-modify-writes so a prune cannot overwrite a concurrent pick. */
   choicesQueue: Promise<void>
+  /** terminalId → workspaceId, learned from agent.status.changed events; one hit identifies the focused workspace. */
+  terminalOwners: Map<string, string>
+  /** terminalId → workspace path resolved through the Orca CLI; terminal ids are stable per incarnation. */
+  focusedPathCache: Map<string, string | null>
 }
 
 export function createWorkerState(): WorkerState {
@@ -31,7 +38,9 @@ export function createWorkerState(): WorkerState {
     latestPostedRequestedAt: 0,
     lastRequestedAt: 0,
     epoch: randomUUID(),
-    choicesQueue: Promise.resolve()
+    choicesQueue: Promise.resolve(),
+    terminalOwners: new Map(),
+    focusedPathCache: new Map()
   }
 }
 
@@ -87,6 +96,38 @@ async function pruneChoices(orca: OrcaWorkerApi, state: WorkerState): Promise<vo
   } catch (err: any) {
     console.error('git-issues: could not prune workspace picks:', err?.message || String(err))
   }
+}
+
+const ORCA_CLI_CANDIDATES = ['orca', '/Applications/Orca.app/Contents/Resources/bin/orca']
+
+/**
+ * Maps a focused terminal id to its workspace path via `orca terminal show`. Not part of the
+ * plugin contract (the JSON shape could change), so every failure degrades to null and the
+ * resolution falls back to agent-event correlation, the stored pick, or the picker.
+ */
+async function lookupFocusedPath(state: WorkerState, terminalId: string): Promise<string | null> {
+  const cached = state.focusedPathCache.get(terminalId)
+  if (cached !== undefined) return cached
+  let result: string | null = null
+  for (const cli of ORCA_CLI_CANDIDATES) {
+    try {
+      const { stdout } = await exec(cli, ['terminal', 'show', '--terminal', terminalId, '--json'], {
+        env: EXEC_ENV,
+        timeout: 5000
+      })
+      const parsed = JSON.parse(stdout) as { ok?: boolean; result?: { worktreePath?: unknown; terminal?: { worktreePath?: unknown } } }
+      const path = parsed?.result?.terminal?.worktreePath ?? parsed?.result?.worktreePath
+      if (typeof path === 'string' && path.length > 0) {
+        result = path
+        break
+      }
+    } catch {
+      // try the next CLI location
+    }
+  }
+  if (state.focusedPathCache.size >= 100) state.focusedPathCache.clear()
+  state.focusedPathCache.set(terminalId, result)
+  return result
 }
 
 const EXEC_ENV = {
@@ -313,6 +354,7 @@ export interface WorkspaceEntry {
 export interface FocusedContext {
   branch?: string | null
   displayName?: string | null
+  terminals?: { id?: string }[] | null
 }
 
 export interface WorkspaceResolution {
@@ -320,6 +362,8 @@ export interface WorkspaceResolution {
   activeBranch: string | null
   key: string
   ambiguous: boolean
+  /** True when the focus was identified through terminal correlation instead of the user's pick. */
+  focusedByTerminal?: boolean
   candidates: RepoCandidate[]
 }
 
@@ -352,7 +396,9 @@ function candidateLabels(paths: string[]): string[] {
 export function resolveWorkspace(
   context: FocusedContext | null,
   workspaces: WorkspaceEntry[],
-  choices: Map<string, string>
+  choices: Map<string, string>,
+  terminalOwners: Map<string, string> = new Map(),
+  focusedPath: string | null = null
 ): WorkspaceResolution {
   const activeBranch = context?.branch ? stripRef(context.branch) : null
   const displayName = context?.displayName ?? null
@@ -376,6 +422,15 @@ export function resolveWorkspace(
     return { workspacePath: matches[0].path, activeBranch, key, ambiguous: false, candidates: [] }
   }
 
+  if (focusedPath && matches.some((w) => w.path === focusedPath)) {
+    return { workspacePath: focusedPath, activeBranch, key, ambiguous: false, focusedByTerminal: true, candidates: [] }
+  }
+
+  const focused = focusedWorkspace(context, workspaces, terminalOwners)
+  if (focused && matches.some((w) => w.path === focused.path)) {
+    return { workspacePath: focused.path, activeBranch, key, ambiguous: false, focusedByTerminal: true, candidates: [] }
+  }
+
   const fallback = matches[0]
   const preferred = choices.get(key)
   const labels = candidateLabels(matches.map((w) => w.path))
@@ -386,6 +441,29 @@ export function resolveWorkspace(
     ambiguous: true,
     candidates: matches.map((w, i) => ({ path: w.path, name: labels[i] }))
   }
+}
+
+/** The workspace a focused terminal belongs to, when agent events have tied its terminal to one. */
+function recordTerminalOwner(state: WorkerState, payload: unknown): void {
+  const event = payload as { workspaceId?: unknown; terminalId?: unknown } | null
+  if (typeof event?.workspaceId === 'string' && typeof event.terminalId === 'string' && event.terminalId.length > 0) {
+    state.terminalOwners.set(event.terminalId, event.workspaceId)
+  }
+}
+
+function focusedWorkspace(
+  context: FocusedContext | null,
+  workspaces: WorkspaceEntry[],
+  terminalOwners: Map<string, string>
+): WorkspaceEntry | null {
+  for (const terminal of context?.terminals ?? []) {
+    const id = typeof terminal?.id === 'string' ? terminal.id : null
+    const workspaceId = id ? terminalOwners.get(id) : undefined
+    if (!workspaceId) continue
+    const workspace = workspaces.find((w) => w.id === workspaceId)
+    if (workspace) return workspace
+  }
+  return null
 }
 
 export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState = createWorkerState()): Promise<RepoContext> {
@@ -402,10 +480,18 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
     if (context?.branch) activeBranch = stripRef(context.branch)
     const list = await orca.host.call('workspace.list')
     const workspaces = (list?.workspaces ?? []) as WorkspaceEntry[]
-    let resolution = resolveWorkspace(context, workspaces, state.sessionChoices)
+    let focusedPath: string | null = null
+    const focusedTerminalIds = (Array.isArray(context?.terminals) ? context.terminals : [])
+      .map((t) => (typeof t?.id === 'string' ? t.id : ''))
+      .filter(Boolean)
+    for (const id of focusedTerminalIds.slice(0, 3)) {
+      focusedPath = await (testHooks.lookupFocusedPath ?? lookupFocusedPath)(state, id)
+      if (focusedPath) break
+    }
+    let resolution = resolveWorkspace(context, workspaces, state.sessionChoices, state.terminalOwners, focusedPath)
     if (resolution.ambiguous) {
       await pruneChoices(orca, state)
-      resolution = resolveWorkspace(context, workspaces, await readChoices(orca, state))
+      resolution = resolveWorkspace(context, workspaces, await readChoices(orca, state), state.terminalOwners, focusedPath)
       contextCandidates = resolution.candidates
     }
     workspacePath = resolution.workspacePath
@@ -492,7 +578,8 @@ export async function collectRepoContext(orca: OrcaWorkerApi, state: WorkerState
 export const testHooks: {
   beforePublish: ((context: RepoContext) => Promise<void>) | null
   afterChoicesRead: (() => Promise<void>) | null
-} = { beforePublish: null, afterChoicesRead: null }
+  lookupFocusedPath: ((state: WorkerState, terminalId: string) => Promise<string | null>) | null
+} = { beforePublish: null, afterChoicesRead: null, lookupFocusedPath: null }
 
 async function publish(orca: OrcaWorkerApi, state: WorkerState, context: RepoContext): Promise<RepoContext> {
   if (testHooks.beforePublish) await testHooks.beforePublish(context)
@@ -523,7 +610,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       try {
         const context = await orca.host.call('workspace.readContext')
         const list = await orca.host.call('workspace.list')
-        const resolution = resolveWorkspace(context, (list?.workspaces ?? []) as WorkspaceEntry[], state.sessionChoices)
+        const resolution = resolveWorkspace(context, (list?.workspaces ?? []) as WorkspaceEntry[], state.sessionChoices, state.terminalOwners)
         if (resolution.ambiguous && resolution.candidates.some((c) => c.path === path)) {
           state.sessionChoices.set(resolution.key, path)
           await updateStoredChoices(orca, state, (choices) => {
@@ -537,6 +624,12 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     const fresh = await collectRepoContext(orca, state)
     return publish(orca, state, fresh)
+  })
+
+  // Correlate agent terminals with workspaces: agent.status.changed is the only plugin-visible
+  // signal that carries both terminalId and workspaceId, and readContext carries terminal ids.
+  orca.events.on('agent.status.changed', (payload: unknown) => {
+    recordTerminalOwner(state, payload)
   })
 
   // Whenever focused workspace or terminals change in Orca, refresh

@@ -36,11 +36,29 @@ export const prFilter = atom<string>('prFilter', 'open', { persist: 'plugin' })
 export const prSearch = atom<string>('')
 export const branchSearch = atom<string>('')
 
+/**
+ * The path this workspace was last resolved to, persisted per workspace by Orca itself. When the
+ * worker reports an ambiguous context, this locker entry tells the panel which candidate this
+ * workspace is, so no picker is needed for a workspace we have resolved before.
+ */
+export const lastResolvedPath = atom<string | null>('lastResolvedPath', null, { persist: 'workspace' })
+
 /** A slower, earlier collect can finish last, so contexts are ordered by when they were requested. */
 function applyContext(data: RepoContext): void {
   const current = read(repoContext)
   if (!current || data.workerEpoch !== current.workerEpoch || data.requestedAt >= current.requestedAt) {
     set(repoContext, data)
+  }
+  if (data.workspacePath && !data.ambiguous) {
+    set(lastResolvedPath, data.workspacePath)
+  }
+  const hint = read(lastResolvedPath)
+  const candidates = data.candidates ?? []
+  if (data.ambiguous && hint && hint !== data.workspacePath && candidates.some((c) => c.path === hint)) {
+    void plugin
+      .request('repo.chooseWorkspace', { path: hint })
+      .then((fresh) => applyContext(fresh as RepoContext))
+      .catch(() => {})
   }
 }
 
