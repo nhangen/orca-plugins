@@ -1,6 +1,6 @@
 import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import * as main from './worker'
-import { parseGitRemote, parseGitBranches } from './worker'
+import { parseGitRemote, parseGitBranches, extractProjectFromTitle } from './worker'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1143,5 +1143,141 @@ test('resolveWorkspace resolves remote terminal owner project to matching local 
     assert.equal(resolution.workspacePath, myProj)
     assert.ok(!resolution.ambiguous)
     assert.equal(resolution.resolvedBy, 'unique')
+  }
+))
+
+test('extractProjectFromTitle parses project names from various shell and agent prompts', () => {
+  assert.equal(extractProjectFromTitle('Review SPX NDX BTC ETH forecasts | tarottraderhistory'), 'tarottraderhistory')
+  assert.equal(extractProjectFromTitle('nhang@ML-1: /mnt/c/Projects/DecoN'), 'DecoN')
+  assert.equal(extractProjectFromTitle('user@remote: ~/code/my-repo $'), 'my-repo')
+  assert.equal(extractProjectFromTitle('/Users/nhangen/code/my-repo %'), 'my-repo')
+  assert.equal(extractProjectFromTitle('C:\\Projects\\my-repo>'), 'my-repo')
+  assert.equal(extractProjectFromTitle('nhangen@MBP-2026 orca-plugins %'), 'orca-plugins')
+  assert.equal(extractProjectFromTitle(''), null)
+  assert.equal(extractProjectFromTitle(null), null)
+  assert.equal(extractProjectFromTitle('..'), null)
+  assert.equal(extractProjectFromTitle('Terminal 1'), null)
+})
+
+test('remote terminal title discovers local clone when not listed in workspaces', async () => {
+  const parentDir = mkdtempSync(join(tmpdir(), 'sources-'))
+  const localClone = join(parentDir, 'DecoN')
+  const unrelated = join(parentDir, 'unrelated-app')
+  mkdirSync(join(localClone, '.git'), { recursive: true })
+  mkdirSync(join(unrelated, '.git'), { recursive: true })
+  try {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': {
+          branch: 'master',
+          displayName: 'master',
+          terminals: [{ id: 'term-remote', title: 'nhang@ML-1: /mnt/c/Projects/DecoN' }]
+        },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'master', project: 'unrelated-app', path: unrelated, branch: 'master', hostId: null }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, localClone)
+    assert.ok(!result.ambiguous)
+    assert.equal(result.resolvedBy, 'unique')
+    await worker.deactivate()
+  } finally {
+    rmSync(parentDir, { recursive: true, force: true })
+  }
+})
+
+test('identified project never falls back to unrelated workspaces sharing default branch', withTempWorkspaces(
+  ['wb-unrelated'],
+  async ([unrelated]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': {
+          branch: 'master',
+          displayName: 'master',
+          terminals: [{ id: 'term-remote', title: 'nhang@ML-1: /mnt/c/Projects/non-existent-repo' }]
+        },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'master', project: 'unrelated', path: unrelated, branch: 'master', hostId: null }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, null)
+    assert.ok(!result.ambiguous)
+    await worker.deactivate()
+  }
+))
+
+test('queryTerminalPath falls back to paired environment when terminal is on remote server', withTempWorkspaces(
+  ['wb-alice', 'wb-bob'],
+  async ([alice, bob]) => {
+    const calls: string[][] = []
+    const pairedStale = async () => {
+      throw Object.assign(new Error('Command failed: orca terminal show'), {
+        code: 1,
+        stdout: JSON.stringify({
+          ok: false,
+          error: {
+            code: 'terminal_handle_stale',
+            message: 'terminal_handle_stale',
+            data: {
+              nextSteps: [
+                'Terminal handles belong to the Orca server that issued them. If this handle came from a paired server (for example orca terminal list --environment <server>), pass the same --environment <server> to this command.'
+              ]
+            }
+          }
+        })
+      })
+    }
+    const envList = async () => ({
+      stdout: JSON.stringify({ ok: true, result: { environments: [{ id: 'env-1', name: 'ml1-wsl' }] } })
+    })
+    const remoteShow = async () => ({
+      stdout: JSON.stringify({ ok: true, result: { terminal: { handle: 'term-remote', worktreePath: bob } } })
+    })
+
+    const runner: OrcaRunner = async (cli, args) => {
+      calls.push([cli, ...args])
+      if (args[0] === 'environment' && args[1] === 'list') return envList()
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        if (args.includes('--environment=ml1-wsl')) return remoteShow()
+        return pairedStale()
+      }
+      throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    }
+
+    await withOrca(runner, async () => {
+      const host = mockHost({
+        capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+        results: {
+          'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: 'term-remote' }] },
+          'workspace.list': {
+            workspaces: [
+              { id: 'w0', kind: 'worktree', name: 'main', path: alice, branch: 'main', hostId: null },
+              { id: 'w1', kind: 'worktree', name: 'main', path: bob, branch: 'main', hostId: null }
+            ],
+            truncated: false
+          }
+        }
+      })
+      const worker = await mountWorker(main, { host })
+      const result = (await worker.request('repo.getContext')) as any
+      assert.equal(result.workspacePath, bob)
+      assert.ok(!result.ambiguous)
+      assert.equal(result.resolvedBy, 'terminal')
+      await worker.deactivate()
+    })
   }
 ))
