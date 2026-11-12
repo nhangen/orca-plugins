@@ -1,7 +1,9 @@
 // The plugin's own worker running in Node.js on the Orca host.
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { JsonValue } from 'orca/host'
@@ -32,6 +34,8 @@ export interface WorkerState {
   focusedPathCache: Map<string, string | null>
   /** One CLI spawn per handle at a time; concurrent collects share it. */
   focusedPathLookups: Map<string, Promise<string | null>>
+  /** Cached remote environment names from `orca environment list` to query paired terminals or worktrees. */
+  environmentsCache?: string[]
 }
 
 export function createWorkerState(): WorkerState {
@@ -153,23 +157,111 @@ function lookupFocusedPath(state: WorkerState, terminalId: string): Promise<stri
   return lookup
 }
 
+/**
+ * The first CLI candidate that runs answers, success or failure: a bare `orca` on PATH is only
+ * tried when the bundled binary does not exist. Undefined means no answer at all.
+ */
+async function runOrcaFirst(args: string[]): Promise<string | undefined> {
+  for (const cli of ORCA_CLI_CANDIDATES) {
+    try {
+      return (await runOrca(cli, args)).stdout
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') continue
+      return typeof err?.stdout === 'string' && err.stdout.length > 0 ? err.stdout : undefined
+    }
+  }
+  return undefined
+}
+
+function parseJson(stdout: string | undefined): any {
+  if (!stdout) return undefined
+  try {
+    return JSON.parse(stdout)
+  } catch {
+    return undefined
+  }
+}
+
+/** Null when the environment list could not be read, so callers can tell "none" from "unknown". */
+async function getEnvironments(state: WorkerState): Promise<string[] | null> {
+  if (state.environmentsCache) return state.environmentsCache
+  const parsed = parseJson(await runOrcaFirst(['environment', 'list', '--json']))
+  if (!parsed?.ok || !Array.isArray(parsed?.result?.environments)) return null
+  const envs: string[] = []
+  for (const e of parsed.result.environments as Array<{ name?: unknown; id?: unknown }>) {
+    const name = typeof e?.name === 'string' ? e.name : typeof e?.id === 'string' ? e.id : null
+    if (name) envs.push(name)
+  }
+  state.environmentsCache = envs
+  return envs
+}
+
+function isPairedStale(stdout: string | null): boolean {
+  const p = parseJson(stdout ?? undefined)
+  return (
+    p?.ok === false &&
+    p?.error?.code === 'terminal_handle_stale' &&
+    Array.isArray(p?.error?.data?.nextSteps) &&
+    p.error.data.nextSteps.some((s: unknown) => typeof s === 'string' && s.includes('--environment'))
+  )
+}
+
 async function queryTerminalPath(state: WorkerState, terminalId: string): Promise<string | null> {
   for (const cli of ORCA_CLI_CANDIDATES) {
-    let stdout: string
+    let stdout: string | null = null
     try {
       ;({ stdout } = await runOrca(cli, ['terminal', 'show', `--terminal=${terminalId}`, '--json']))
     } catch (err: any) {
       if (err?.code === 'ENOENT') continue
       // A stale handle exits 1 with its JSON answer on stdout.
-      if (typeof err?.stdout !== 'string' || err.stdout.length === 0) return null
-      stdout = err.stdout
+      if (typeof err?.stdout === 'string' && err.stdout.length > 0) {
+        stdout = err.stdout
+      }
     }
-    const path = parseTerminalShow(stdout)
+
+    let path = stdout ? parseTerminalShow(stdout) : undefined
+    if (path === null && isPairedStale(stdout)) {
+      const envs = await getEnvironments(state)
+      let unknown = envs === null
+      for (const env of envs ?? []) {
+        const envPath = parseTerminalShow(
+          (await runOrcaFirst(['terminal', 'show', `--environment=${env}`, `--terminal=${terminalId}`, '--json'])) ?? ''
+        )
+        if (typeof envPath === 'string') {
+          path = envPath
+          break
+        }
+        if (envPath === undefined) unknown = true
+      }
+      if (path === null && unknown) return null
+    }
+
     if (path === undefined) return null
     rememberBounded(state.focusedPathCache, terminalId, path)
     return path
   }
   return null
+}
+
+/**
+ * The project of the one active remote worktree on the focused branch. It is not tied to the
+ * focused workspace, so it only preselects a picker candidate and never resolves on its own.
+ */
+async function lookupActiveRemoteProject(state: WorkerState, activeBranch: string | null): Promise<string | null> {
+  if (activeBranch == null) return null
+  const projects = new Set<string>()
+  for (const env of (await getEnvironments(state)) ?? []) {
+    const parsed = parseJson(await runOrcaFirst(['worktree', 'ps', `--environment=${env}`, '--json']))
+    if (!parsed?.ok || !Array.isArray(parsed?.result?.worktrees)) continue
+    for (const wt of parsed.result.worktrees as Array<Record<string, unknown>>) {
+      const active = Boolean(wt?.hasHostSidebarActivity || wt?.sidebarStatus === 'active' || wt?.status === 'active' || wt?.isActive)
+      if (!active || typeof wt.branch !== 'string' || stripRef(wt.branch) !== activeBranch) continue
+      const name =
+        typeof wt.repo === 'string' ? wt.repo : typeof wt.path === 'string' ? wt.path.split(/[/\\]+/).filter(Boolean).pop() : undefined
+      if (name) projects.add(name)
+    }
+  }
+  return projects.size === 1 ? [...projects][0] : null
 }
 
 const EXEC_ENV = {
@@ -388,15 +480,21 @@ export interface WorkspaceEntry {
   id?: string
   kind?: 'worktree' | 'folder'
   name?: string
+  project?: string | null
   path: string
   branch?: string | null
   hostId?: string | null
 }
 
+export interface FocusedTerminal {
+  id?: string
+  title?: string | null
+}
+
 export interface FocusedContext {
   branch?: string | null
   displayName?: string | null
-  terminals?: { id?: string }[] | null
+  terminals?: FocusedTerminal[] | null
 }
 
 export interface WorkspaceResolution {
@@ -421,6 +519,84 @@ function isLocalWorkspace(w: WorkspaceEntry): boolean {
   return (w.hostId == null || w.hostId === 'local') && existsSync(w.path)
 }
 
+/**
+ * Extracts a candidate repository or project name from a terminal title or shell prompt.
+ * Handles agent task titles ("Review ... | tarottraderhistory"),
+ * SSH/remote prompts ("nhang@ML-1: /mnt/c/Projects/DecoN", "user@host: ~/code/my-repo $"),
+ * path prompts ("/Users/nhangen/code/repo %"), and user@host directory prompts.
+ */
+export function extractProjectFromTitle(title: string | null | undefined): string | null {
+  if (!title || typeof title !== 'string') return null
+  const trimmed = title.trim()
+  if (!trimmed) return null
+
+  const pipeMatch = trimmed.match(/\|\s*([a-zA-Z0-9_.-]+)\s*$/)
+  if (pipeMatch && pipeMatch[1] && pipeMatch[1] !== '.' && pipeMatch[1] !== '..') {
+    return pipeMatch[1]
+  }
+
+  const colonPathMatch = trimmed.match(/:\s*([/~\\].*?)(?:\s*[$#%>]|\s*$)/)
+  if (colonPathMatch && colonPathMatch[1]) {
+    const rawPath = colonPathMatch[1].trim()
+    const segments = rawPath.split(/[/\\]+/).filter(Boolean)
+    const last = segments[segments.length - 1]
+    if (last && last !== '.' && last !== '..') {
+      return last
+    }
+  }
+
+  const pathPromptMatch = trimmed.match(/^([/~\\].*?)(?:\s*[$#%>]|\s*$)/)
+  if (pathPromptMatch && pathPromptMatch[1]) {
+    const rawPath = pathPromptMatch[1].trim()
+    const segments = rawPath.split(/[/\\]+/).filter(Boolean)
+    const last = segments[segments.length - 1]
+    if (last && last !== '.' && last !== '..') {
+      return last
+    }
+  }
+
+  const userHostMatch = trimmed.match(/^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+[:\s]+([a-zA-Z0-9_.-]+)(?:\s*[$#%>]|\s*$)/)
+  if (userHostMatch && userHostMatch[1] && userHostMatch[1] !== '.' && userHostMatch[1] !== '..') {
+    return userHostMatch[1]
+  }
+
+  return null
+}
+
+const PROJECT_NAME = /^[A-Za-z0-9_.-]+$/
+const CLONE_ROOTS = ['code', 'Projects', 'src', 'dev', 'workspace', 'workspaces', 'ML-AI']
+
+/**
+ * A local clone named after the project: a sibling or cousin of a known local workspace, or a
+ * folder under a common source root. The name comes from remote hosts and terminal titles, so
+ * anything that is not a single plain path segment is refused.
+ */
+export function findLocalCloneForProject(knownWorkspaces: WorkspaceEntry[], projectName: string): string | null {
+  if (!PROJECT_NAME.test(projectName) || projectName === '.' || projectName === '..') return null
+  if (projectName === 'main' || projectName === 'master') return null
+  const roots = new Set<string>()
+  for (const w of knownWorkspaces) {
+    if (w.path && isLocalWorkspace(w)) {
+      roots.add(dirname(w.path))
+      roots.add(dirname(dirname(w.path)))
+    }
+  }
+  for (const root of testHooks.cloneRoots ?? CLONE_ROOTS.map((r) => join(homedir(), r))) roots.add(root)
+  const wanted = projectName.toLowerCase()
+  for (const root of roots) {
+    let entries: string[]
+    try {
+      entries = readdirSync(root)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.toLowerCase() === wanted && existsSync(join(root, entry, '.git'))) return join(root, entry)
+    }
+  }
+  return null
+}
+
 /** The shortest trailing run of folders that tells each path apart from the others. */
 function candidateLabels(paths: string[]): string[] {
   const segments = paths.map((p) => p.split('/').filter(Boolean))
@@ -434,46 +610,161 @@ function candidateLabels(paths: string[]): string[] {
   })
 }
 
+function baseName(path: string): string {
+  return path.split(/[/\\]+/).filter(Boolean).pop() ?? ''
+}
+
+function discoveredEntry(path: string): WorkspaceEntry {
+  return { id: `discovered:${path}`, kind: 'worktree', name: baseName(path), project: baseName(path), path, branch: null, hostId: 'local' }
+}
+
+function matchesProject(w: WorkspaceEntry, projects: Set<string>): boolean {
+  const names = [w.project ?? '', w.name ?? '', baseName(w.path)].map((n) => n.toLowerCase())
+  return names.some((n) => n.length > 0 && projects.has(n))
+}
+
+/**
+ * Project signals come in two strengths. Trusted ones (the focused workspace's own remote
+ * project, a terminal's real worktree path) may narrow the candidates, add a discovered clone,
+ * and rule out unrelated workspaces. Weak ones (terminal titles, which any process can set, and
+ * the unbound active-remote-worktree guess) only preselect a candidate in the picker.
+ */
 export function resolveWorkspace(
   context: FocusedContext | null,
   workspaces: WorkspaceEntry[],
   choices: Map<string, string>,
   terminalOwners: Map<string, string> = new Map(),
   focusedPath: string | null = null,
-  hintPath: string | null = null
+  hintPath: string | null = null,
+  remoteProject: string | null = null
 ): WorkspaceResolution {
   const activeBranch = context?.branch ? stripRef(context.branch) : null
   const displayName = context?.displayName ?? null
   const key = choiceKey(activeBranch, displayName)
   const pool = workspaces.filter((w) => Boolean(w.path) && isLocalWorkspace(w))
-  if (pool.length === 0) {
-    return { workspacePath: null, activeBranch, key, ambiguous: false, resolvedBy: null, candidates: [] }
+
+  const isGeneric = (p: string): boolean => {
+    const l = p.toLowerCase()
+    return l.length === 0 || l === 'main' || l === 'master' || l === activeBranch?.toLowerCase()
   }
+  const addTo = (set: Set<string>, p: string | null | undefined): void => {
+    const t = p?.trim()
+    if (t && !isGeneric(t)) set.add(t.toLowerCase())
+  }
+
+  const trusted = new Set<string>()
+  if (displayName != null && displayName !== activeBranch) {
+    for (const w of workspaces) {
+      if (!isLocalWorkspace(w) && w.name === displayName) addTo(trusted, w.project)
+    }
+  }
+  const focused = focusedWorkspace(context, workspaces, terminalOwners)
+  if (focused && !isLocalWorkspace(focused)) addTo(trusted, focused.project)
+  if (focusedPath && (pool.some((w) => w.path === focusedPath) || findLocalCloneForProject(workspaces, baseName(focusedPath)))) {
+    addTo(trusted, baseName(focusedPath))
+  }
+
+  const weak = new Set<string>()
+  for (const terminal of context?.terminals ?? []) addTo(weak, extractProjectFromTitle(terminal?.title))
+  addTo(weak, remoteProject)
+
+  const display = new Set<string>()
+  addTo(display, displayName)
+
+  const trustedMatches = trusted.size > 0 ? pool.filter((w) => matchesProject(w, trusted)) : []
+  const trustedClones: WorkspaceEntry[] = []
+  if (trusted.size > 0 && trustedMatches.length === 0) {
+    for (const proj of trusted) {
+      const clonePath = findLocalCloneForProject(workspaces, proj)
+      if (clonePath && !trustedClones.some((w) => w.path === clonePath)) trustedClones.push(discoveredEntry(clonePath))
+    }
+  }
+  if (trustedClones.length === 1) {
+    return { workspacePath: trustedClones[0].path, activeBranch, key, ambiguous: false, resolvedBy: 'discovered', candidates: [] }
+  }
+
+  const byProject =
+    trustedMatches.length > 0
+      ? trustedMatches
+      : trustedClones.length > 0
+        ? trustedClones
+        : display.size > 0
+          ? pool.filter((w) => matchesProject(w, display))
+          : []
+  const ruledOut = trusted.size > 0 && trustedMatches.length === 0
 
   const onBranch = activeBranch != null ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch) : []
   const named = displayName != null ? pool.filter((w) => w.name === displayName) : []
-  const both = onBranch.filter((w) => named.includes(w))
+  const bothNamed = onBranch.filter((w) => named.includes(w))
+  const bothProject = onBranch.filter((w) => byProject.includes(w))
+  const isDefaultBranchName = displayName != null && (displayName === activeBranch || displayName === 'main' || displayName === 'master')
+
+  // When displayName is just the branch name, bothNamed only lists clones on the default branch.
+  const both = isDefaultBranchName
+    ? bothProject
+    : bothNamed.length === 1
+      ? bothNamed
+      : bothProject.length > 0
+        ? bothProject
+        : bothNamed
+
   // A folder workspace has no branch, so its name is the only signal that can match it.
   const namedFolders = named.filter((w) => w.branch == null)
-  const matches = [both, namedFolders, onBranch, named].find((list) => list.length > 0) ?? []
+
+  const confident = [both, namedFolders, byProject].find((list) => list.length > 0)
+  let matches = confident ?? [ruledOut ? [] : onBranch, ruledOut ? [] : named].find((list) => list.length > 0) ?? []
+
+  const weakPick = weak.size > 0 ? matches.find((w) => matchesProject(w, weak)) : undefined
+  // Only a guess among default-branch clones may add an unlisted repo, and it never resolves alone.
+  let weakClone: WorkspaceEntry | undefined
+  if (!weakPick && !confident && !ruledOut && isDefaultBranchName) {
+    for (const proj of weak) {
+      const clonePath = findLocalCloneForProject(workspaces, proj)
+      if (clonePath && !matches.some((w) => w.path === clonePath)) {
+        weakClone = discoveredEntry(clonePath)
+        matches = [weakClone, ...matches]
+        break
+      }
+    }
+  }
+
   if (matches.length === 0) {
     return { workspacePath: null, activeBranch, key, ambiguous: false, resolvedBy: null, candidates: [] }
   }
 
-  if (matches.length === 1) {
-    return { workspacePath: matches[0].path, activeBranch, key, ambiguous: false, resolvedBy: 'unique', candidates: [] }
+  const isFocusedPath = (w: WorkspaceEntry): boolean =>
+    focusedPath != null && (w.path === focusedPath || matchesProject(w, new Set([baseName(focusedPath).toLowerCase()])))
+
+  if (matches.length === 1 && !weakClone) {
+    return {
+      workspacePath: matches[0].path,
+      activeBranch,
+      key,
+      ambiguous: false,
+      resolvedBy: isFocusedPath(matches[0]) ? 'terminal' : 'unique',
+      candidates: []
+    }
   }
 
-  if (focusedPath && matches.some((w) => w.path === focusedPath)) {
-    return { workspacePath: focusedPath, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
+  if (focusedPath) {
+    const exact = matches.find((w) => w.path === focusedPath)
+    if (exact) {
+      return { workspacePath: exact.path, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
+    }
   }
 
-  const focused = focusedWorkspace(context, workspaces, terminalOwners)
   if (focused && matches.some((w) => w.path === focused.path)) {
     return { workspacePath: focused.path, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
   }
 
-  // A hint or a pick is a guess about which workspace is focused, so the picker stays up to correct it.
+  if (focusedPath) {
+    const byFocusedProject = matches.filter(isFocusedPath)
+    if (byFocusedProject.length === 1) {
+      return { workspacePath: byFocusedProject[0].path, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
+    }
+  }
+
+  // A hint, a pick, or a weak signal is a guess about which workspace is focused, so the picker stays up to correct it.
   const labels = candidateLabels(matches.map((w) => w.path))
   const candidates = matches.map((w, i) => ({ path: w.path, name: labels[i] }))
   const hinted = hintPath ? matches.find((w) => w.path === hintPath) : undefined
@@ -482,7 +773,7 @@ export function resolveWorkspace(
   }
   const picked = matches.find((w) => w.path === choices.get(key))
   return {
-    workspacePath: (picked ?? matches[0]).path,
+    workspacePath: (picked ?? weakPick ?? weakClone ?? matches[0]).path,
     activeBranch,
     key,
     ambiguous: true,
@@ -553,8 +844,18 @@ export async function collectRepoContext(
         focusedPath = await lookupFocusedPath(state, id)
         if (focusedPath) break
       }
+      const remoteProject =
+        !focusedPath && focusedTerminalIds.length === 0 ? await lookupActiveRemoteProject(state, activeBranch) : null
       await pruneChoices(orca, state)
-      resolution = resolveWorkspace(context, workspaces, await readChoices(orca, state), state.terminalOwners, focusedPath, hintPath)
+      resolution = resolveWorkspace(
+        context,
+        workspaces,
+        await readChoices(orca, state),
+        state.terminalOwners,
+        focusedPath,
+        hintPath,
+        remoteProject
+      )
       contextCandidates = resolution.candidates
     }
     workspacePath = resolution.workspacePath
@@ -654,7 +955,8 @@ export const testHooks: {
   beforePublish: ((context: RepoContext) => Promise<void>) | null
   afterChoicesRead: (() => Promise<void>) | null
   execOrca: ((cli: string, args: string[]) => Promise<{ stdout: string }>) | null
-} = { beforePublish: null, afterChoicesRead: null, execOrca: null }
+  cloneRoots: string[] | null
+} = { beforePublish: null, afterChoicesRead: null, execOrca: null, cloneRoots: null }
 
 async function publish(orca: OrcaWorkerApi, state: WorkerState, context: RepoContext): Promise<RepoContext> {
   if (testHooks.beforePublish) await testHooks.beforePublish(context)

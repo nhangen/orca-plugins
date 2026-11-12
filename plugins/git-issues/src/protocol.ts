@@ -69,7 +69,7 @@ export interface RepoContext {
   focusMoved?: boolean
 }
 
-export type ResolvedBy = 'unique' | 'terminal' | 'hint' | 'pick' | null
+export type ResolvedBy = 'unique' | 'terminal' | 'discovered' | 'hint' | 'pick' | null
 
 declare module 'orca' {
   interface PluginRequests {
