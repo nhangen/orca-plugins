@@ -388,6 +388,7 @@ export interface WorkspaceEntry {
   id?: string
   kind?: 'worktree' | 'folder'
   name?: string
+  project?: string | null
   path: string
   branch?: string | null
   hostId?: string | null
@@ -450,12 +451,31 @@ export function resolveWorkspace(
     return { workspacePath: null, activeBranch, key, ambiguous: false, resolvedBy: null, candidates: [] }
   }
 
+  const matchingProjects = new Set<string>()
+  if (displayName != null) {
+    matchingProjects.add(displayName)
+    if (displayName !== activeBranch) {
+      for (const w of workspaces) {
+        if (!isLocalWorkspace(w) && w.name === displayName && w.project) {
+          matchingProjects.add(w.project)
+        }
+      }
+    }
+  }
+  const focused = focusedWorkspace(context, workspaces, terminalOwners)
+  if (focused && !isLocalWorkspace(focused) && focused.project) {
+    matchingProjects.add(focused.project)
+  }
+
   const onBranch = activeBranch != null ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch) : []
   const named = displayName != null ? pool.filter((w) => w.name === displayName) : []
-  const both = onBranch.filter((w) => named.includes(w))
+  const byProject = matchingProjects.size > 0 ? pool.filter((w) => w.project != null && matchingProjects.has(w.project)) : []
+  const bothNamed = onBranch.filter((w) => named.includes(w))
+  const bothProject = onBranch.filter((w) => byProject.includes(w))
+  const both = bothNamed.length === 1 ? bothNamed : bothProject.length > 0 ? bothProject : bothNamed
   // A folder workspace has no branch, so its name is the only signal that can match it.
   const namedFolders = named.filter((w) => w.branch == null)
-  const matches = [both, namedFolders, onBranch, named].find((list) => list.length > 0) ?? []
+  const matches = [both, namedFolders, byProject, onBranch, named].find((list) => list.length > 0) ?? []
   if (matches.length === 0) {
     return { workspacePath: null, activeBranch, key, ambiguous: false, resolvedBy: null, candidates: [] }
   }
@@ -468,7 +488,6 @@ export function resolveWorkspace(
     return { workspacePath: focusedPath, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
   }
 
-  const focused = focusedWorkspace(context, workspaces, terminalOwners)
   if (focused && matches.some((w) => w.path === focused.path)) {
     return { workspacePath: focused.path, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
   }

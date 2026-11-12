@@ -1044,3 +1044,104 @@ test('candidates that share a folder name are labelled with their parent folder'
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('focused on main in an SSH or hosted repo resolves to the matching local workspace by project', withTempWorkspaces(
+  ['wb-my-project', 'wb-other-project'],
+  async ([myProj, otherProj]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'my-project', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', project: 'my-project', path: myProj, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'worktree', name: 'main', project: 'other-project', path: otherProj, branch: 'main', hostId: null },
+            { id: 'w2', kind: 'worktree', name: 'my-project', project: 'my-project', path: '/remote/ssh/path', branch: 'main', hostId: 'ssh-buildbox' }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, myProj)
+    assert.ok(!result.ambiguous)
+    assert.equal(result.resolvedBy, 'unique')
+    assert.equal(result.candidates, undefined)
+    await worker.deactivate()
+  }
+))
+
+test('focused on an SSH repo with empty branch resolves to the matching local workspace by project', withTempWorkspaces(
+  ['wb-my-project', 'wb-other-project'],
+  async ([myProj, otherProj]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: '', displayName: 'my-project', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', project: 'my-project', path: myProj, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'worktree', name: 'main', project: 'other-project', path: otherProj, branch: 'main', hostId: null },
+            { id: 'w2', kind: 'worktree', name: 'my-project', project: 'my-project', path: '/remote/ssh/path', branch: '', hostId: 'ssh-buildbox' }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, myProj)
+    assert.ok(!result.ambiguous)
+    assert.equal(result.resolvedBy, 'unique')
+    assert.equal(result.candidates, undefined)
+    await worker.deactivate()
+  }
+))
+
+test('focused on an SSH repo with custom workspace name resolves via remote workspace project', withTempWorkspaces(
+  ['wb-my-project', 'wb-other-project'],
+  async ([myProj, otherProj]) => {
+    const host = mockHost({
+      capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+      results: {
+        'workspace.readContext': { branch: 'main', displayName: 'cloud-dev', terminals: [] },
+        'workspace.list': {
+          workspaces: [
+            { id: 'w0', kind: 'worktree', name: 'main', project: 'my-project', path: myProj, branch: 'main', hostId: null },
+            { id: 'w1', kind: 'worktree', name: 'main', project: 'other-project', path: otherProj, branch: 'main', hostId: null },
+            { id: 'w2', kind: 'worktree', name: 'cloud-dev', project: 'my-project', path: '/remote/ssh/path', branch: 'main', hostId: 'ssh-buildbox' }
+          ],
+          truncated: false
+        }
+      }
+    })
+    const worker = await mountWorker(main, { host })
+    const result = (await worker.request('repo.getContext')) as any
+    assert.equal(result.workspacePath, myProj)
+    assert.ok(!result.ambiguous)
+    assert.equal(result.resolvedBy, 'unique')
+    assert.equal(result.candidates, undefined)
+    await worker.deactivate()
+  }
+))
+
+test('resolveWorkspace resolves remote terminal owner project to matching local workspace', withTempWorkspaces(
+  ['wb-my-project', 'wb-other-project'],
+  async ([myProj, otherProj]) => {
+    const terminalOwners = new Map([['t-remote', 'w2']])
+    const resolution = main.resolveWorkspace(
+      { branch: 'main', displayName: 'main', terminals: [{ id: 't-remote' }] },
+      [
+        { id: 'w0', kind: 'worktree', name: 'main', project: 'my-project', path: myProj, branch: 'main', hostId: null },
+        { id: 'w1', kind: 'worktree', name: 'main', project: 'other-project', path: otherProj, branch: 'main', hostId: null },
+        { id: 'w2', kind: 'worktree', name: 'main', project: 'my-project', path: '/remote/ssh/path', branch: 'main', hostId: 'ssh-buildbox' }
+      ],
+      new Map(),
+      terminalOwners
+    )
+    assert.equal(resolution.workspacePath, myProj)
+    assert.ok(!resolution.ambiguous)
+    assert.equal(resolution.resolvedBy, 'unique')
+  }
+))
