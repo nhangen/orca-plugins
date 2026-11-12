@@ -17,6 +17,8 @@ function withTempWorkspaces(names: string[], run: (paths: string[]) => Promise<v
   }
 }
 
+main.testHooks.cloneRoots = []
+
 const baseHost = (workspaces: unknown[], options: Record<string, unknown> = {}): Object =>
   mockHost({
     capabilities: ['storage:own', 'workspace:read', 'agent:read'],
@@ -1135,7 +1137,7 @@ test('resolveWorkspace resolves remote terminal owner project to matching local 
       [
         { id: 'w0', kind: 'worktree', name: 'main', project: 'my-project', path: myProj, branch: 'main', hostId: null },
         { id: 'w1', kind: 'worktree', name: 'main', project: 'other-project', path: otherProj, branch: 'main', hostId: null },
-        { id: 'w2', kind: 'worktree', name: 'main', project: 'my-project', path: '/remote/ssh/path', branch: 'main', hostId: 'ssh-buildbox' }
+        { id: 'w2', kind: 'worktree', name: 'cloud-dev', project: 'my-project', path: '/remote/ssh/path', branch: 'main', hostId: 'ssh-buildbox' }
       ],
       new Map(),
       terminalOwners
@@ -1159,7 +1161,7 @@ test('extractProjectFromTitle parses project names from various shell and agent 
   assert.equal(extractProjectFromTitle('Terminal 1'), null)
 })
 
-test('remote terminal title discovers local clone when not listed in workspaces', async () => {
+test('a terminal title only preselects a discovered clone and keeps the picker up', async () => {
   const parentDir = mkdtempSync(join(tmpdir(), 'sources-'))
   const localClone = join(parentDir, 'DecoN')
   const unrelated = join(parentDir, 'unrelated-app')
@@ -1182,18 +1184,21 @@ test('remote terminal title discovers local clone when not listed in workspaces'
         }
       }
     })
+    main.testHooks.cloneRoots = [parentDir]
     const worker = await mountWorker(main, { host })
     const result = (await worker.request('repo.getContext')) as any
     assert.equal(result.workspacePath, localClone)
-    assert.ok(!result.ambiguous)
-    assert.equal(result.resolvedBy, 'unique')
+    assert.ok(result.ambiguous)
+    assert.notEqual(result.resolvedBy, 'terminal')
+    assert.deepEqual(result.candidates.map((c: any) => c.path), [localClone, unrelated])
     await worker.deactivate()
   } finally {
+    main.testHooks.cloneRoots = []
     rmSync(parentDir, { recursive: true, force: true })
   }
 })
 
-test('identified project never falls back to unrelated workspaces sharing default branch', withTempWorkspaces(
+test('a terminal title naming no known repo does not rule out the workspace on the branch', withTempWorkspaces(
   ['wb-unrelated'],
   async ([unrelated]) => {
     const host = mockHost({
@@ -1214,7 +1219,7 @@ test('identified project never falls back to unrelated workspaces sharing defaul
     })
     const worker = await mountWorker(main, { host })
     const result = (await worker.request('repo.getContext')) as any
-    assert.equal(result.workspacePath, null)
+    assert.equal(result.workspacePath, unrelated)
     assert.ok(!result.ambiguous)
     await worker.deactivate()
   }
@@ -1337,7 +1342,7 @@ test('focused terminal on remote worktree discovers unlisted local clone on defa
       const result = (await worker.request('repo.getContext')) as any
       assert.equal(result.workspacePath, localClone)
       assert.ok(!result.ambiguous)
-      assert.equal(result.resolvedBy, 'terminal')
+      assert.equal(result.resolvedBy, 'discovered')
       await worker.deactivate()
     })
   } finally {
@@ -1345,7 +1350,7 @@ test('focused terminal on remote worktree discovers unlisted local clone on defa
   }
 })
 
-test('active remote worktree discovers unlisted local clone on default branch when terminals are empty', async () => {
+test('the one active remote worktree on the branch preselects its local clone in the picker', async () => {
   const parentDir = mkdtempSync(join(tmpdir(), 'sources-'))
   const swarm = join(parentDir, 'swarm')
   const shieldWall = join(parentDir, 'shield-wall')
@@ -1396,10 +1401,186 @@ test('active remote worktree discovers unlisted local clone on default branch wh
       const worker = await mountWorker(main, { host })
       const result = (await worker.request('repo.getContext')) as any
       assert.equal(result.workspacePath, localClone)
-      assert.ok(!result.ambiguous)
+      assert.ok(result.ambiguous)
+      assert.equal(result.resolvedBy, null)
+      assert.equal(result.candidates.length, 3)
       await worker.deactivate()
     })
   } finally {
     rmSync(parentDir, { recursive: true, force: true })
   }
 })
+
+const localEntry = (id: string, name: string, path: string, branch: string, project?: string) => ({
+  id, kind: 'worktree', name, project, path, branch, hostId: null
+})
+
+test('a display name that matches no repo still resolves the one workspace on the branch', withTempWorkspaces(
+  ['wb-feat'],
+  async ([feat]) => {
+    const resolution = main.resolveWorkspace(
+      { branch: 'feat', displayName: 'My Feature', terminals: [] },
+      [localEntry('w0', 'feat-wt', feat, 'feat')],
+      new Map()
+    )
+    assert.equal(resolution.workspacePath, feat)
+    assert.equal(resolution.resolvedBy, 'unique')
+  }
+))
+
+test('a noisy terminal title on the default branch keeps the picker', withTempWorkspaces(
+  ['wb-alpha', 'wb-beta'],
+  async ([alpha, beta]) => {
+    const resolution = main.resolveWorkspace(
+      { branch: 'main', displayName: 'main', terminals: [{ id: 't1', title: 'npm run build | tee' }] },
+      [localEntry('w0', 'main', alpha, 'main'), localEntry('w1', 'main', beta, 'main')],
+      new Map()
+    )
+    assert.ok(resolution.ambiguous)
+    assert.equal(resolution.candidates.length, 2)
+  }
+))
+
+test('a remote workspace named after the branch does not pick a local repo', withTempWorkspaces(
+  ['wb-swarm', 'wb-shield'],
+  async ([swarm, shield]) => {
+    const resolution = main.resolveWorkspace(
+      { branch: 'main', displayName: 'main', terminals: [] },
+      [
+        localEntry('w0', 'main', swarm, 'main', 'swarm'),
+        localEntry('w1', 'main', shield, 'main', 'shield'),
+        { id: 'w2', kind: 'worktree', name: 'main', project: 'shield', path: '/remote/shield', branch: 'main', hostId: 'ssh-box' }
+      ],
+      new Map()
+    )
+    assert.ok(resolution.ambiguous)
+    assert.equal(resolution.candidates.length, 2)
+  }
+))
+
+test('an active remote worktree on another branch does not resolve the focus', async () => {
+  const parentDir = mkdtempSync(join(tmpdir(), 'sources-'))
+  const alpha = join(parentDir, 'alpha')
+  const beta = join(parentDir, 'beta')
+  for (const dir of [alpha, beta, join(parentDir, 'zz')]) mkdirSync(join(dir, '.git'), { recursive: true })
+  try {
+    const runner: OrcaRunner = async (_cli, args) => {
+      if (args[0] === 'environment') return { stdout: JSON.stringify({ ok: true, result: { environments: [{ name: 'box' }] } }) }
+      if (args[0] === 'worktree') {
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            result: { worktrees: [{ repo: 'zz', path: '/remote/zz', branch: 'other', isActive: true, defaultBranch: 'main' }] }
+          })
+        }
+      }
+      throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    }
+    await withOrca(runner, async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alpha, beta], []) })
+      const result = (await worker.request('repo.getContext')) as any
+      assert.ok(result.ambiguous)
+      assert.deepEqual(result.candidates.map((c: any) => c.path), [alpha, beta])
+      await worker.deactivate()
+    })
+  } finally {
+    rmSync(parentDir, { recursive: true, force: true })
+  }
+})
+
+test('a bundled CLI that times out is not retried as a bare orca on PATH', withTempWorkspaces(
+  ['wb-alpha', 'wb-beta'],
+  async ([alpha, beta]) => {
+    const calls: string[] = []
+    const runner: OrcaRunner = async (cli, args) => {
+      calls.push(cli)
+      if (cli === 'orca') return { stdout: JSON.stringify({ ok: true, result: { environments: [{ name: 'box' }] } }) }
+      throw Object.assign(new Error(`timed out: ${args.join(' ')}`), { code: 'ETIMEDOUT', killed: true, stdout: '' })
+    }
+    await withOrca(runner, async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alpha, beta], []) })
+      await worker.request('repo.getContext')
+      assert.ok(calls.length > 0)
+      assert.ok(!calls.includes('orca'))
+      await worker.deactivate()
+    })
+  }
+))
+
+test('an empty worktree list from the bundled CLI is not retried as a bare orca on PATH', withTempWorkspaces(
+  ['wb-alpha', 'wb-beta'],
+  async ([alpha, beta]) => {
+    const calls: string[] = []
+    const runner: OrcaRunner = async (cli, args) => {
+      calls.push(`${cli} ${args[0]}`)
+      if (args[0] === 'environment') return { stdout: JSON.stringify({ ok: true, result: { environments: [{ name: 'box' }] } }) }
+      if (args[0] === 'worktree') return { stdout: JSON.stringify({ ok: true, result: { worktrees: [] } }) }
+      throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    }
+    await withOrca(runner, async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alpha, beta], []) })
+      await worker.request('repo.getContext')
+      assert.ok(calls.includes(`${APP_ORCA} worktree`))
+      assert.ok(!calls.includes('orca worktree'))
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a paired terminal whose environment lookup times out is asked again on the next collect', withTempWorkspaces(
+  ['wb-alpha', 'wb-beta'],
+  async ([alpha, beta]) => {
+    let plainShows = 0
+    const runner: OrcaRunner = async (cli, args) => {
+      if (cli === 'orca') throw missingBinary()
+      if (args[0] === 'environment') return { stdout: JSON.stringify({ ok: true, result: { environments: [{ name: 'box' }] } }) }
+      if (args[0] === 'terminal' && args.some((a) => a.startsWith('--environment='))) {
+        throw Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM', stdout: '' })
+      }
+      if (args[0] === 'terminal') {
+        plainShows++
+        throw Object.assign(new Error('stale'), {
+          code: 1,
+          stdout: JSON.stringify({
+            ok: false,
+            error: { code: 'terminal_handle_stale', data: { nextSteps: ['pass the same --environment <server> to this command.'] } }
+          })
+        })
+      }
+      throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    }
+    await withOrca(runner, async () => {
+      const worker = await mountWorker(main, { host: sameNameHost([alpha, beta]) })
+      await worker.request('repo.getContext')
+      await worker.request('repo.getContext')
+      assert.equal(plainShows, 2)
+      await worker.deactivate()
+    })
+  }
+))
+
+test('a project name that is not a single folder name never leaves the clone roots', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roots-'))
+  try {
+    mkdirSync(join(root, 'a', 'ws'), { recursive: true })
+    mkdirSync(join(root, 'x', '.git'), { recursive: true })
+    const known = [localEntry('w0', 'ws', join(root, 'a', 'ws'), 'main')]
+    assert.equal(main.findLocalCloneForProject(known as any, '../x'), null)
+    assert.equal(main.findLocalCloneForProject(known as any, 'x'), join(root, 'x'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('project matching ignores case between the remote name and the local workspace', withTempWorkspaces(
+  ['wb-decon', 'wb-other'],
+  async ([decon, other]) => {
+    const resolution = main.resolveWorkspace(
+      { branch: 'main', displayName: 'DECON', terminals: [] },
+      [localEntry('w0', 'main', decon, 'main', 'DecoN'), localEntry('w1', 'main', other, 'main', 'other')],
+      new Map()
+    )
+    assert.equal(resolution.workspacePath, decon)
+    assert.ok(!resolution.ambiguous)
+  }
+))
