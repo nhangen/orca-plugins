@@ -1281,3 +1281,125 @@ test('queryTerminalPath falls back to paired environment when terminal is on rem
     })
   }
 ))
+
+test('focused terminal on remote worktree discovers unlisted local clone on default branch instead of ambiguous picker', async () => {
+  const parentDir = mkdtempSync(join(tmpdir(), 'sources-'))
+  const swarm = join(parentDir, 'swarm')
+  const shieldWall = join(parentDir, 'shield-wall')
+  const localClone = join(parentDir, 'my-remote-repo')
+  mkdirSync(join(swarm, '.git'), { recursive: true })
+  mkdirSync(join(shieldWall, '.git'), { recursive: true })
+  mkdirSync(join(localClone, '.git'), { recursive: true })
+  try {
+    const runner: OrcaRunner = async (cli, args) => {
+      if (args[0] === 'environment' && args[1] === 'list') {
+        return { stdout: JSON.stringify({ ok: true, result: { environments: [{ id: 'env-1', name: 'ml1-wsl' }] } }) }
+      }
+      if (args[0] === 'terminal' && args[1] === 'show') {
+        if (args.includes('--environment=ml1-wsl')) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              result: { terminal: { handle: 'term-remote', worktreePath: '/mnt/c/Projects/my-remote-repo' } }
+            })
+          }
+        }
+        throw Object.assign(new Error('stale'), {
+          code: 1,
+          stdout: JSON.stringify({
+            ok: false,
+            error: {
+              code: 'terminal_handle_stale',
+              message: 'terminal_handle_stale',
+              data: { nextSteps: ['pass the same --environment <server> to this command.'] }
+            }
+          })
+        })
+      }
+      throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    }
+
+    await withOrca(runner, async () => {
+      const host = mockHost({
+        capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+        results: {
+          'workspace.readContext': { branch: 'master', displayName: 'master', terminals: [{ id: 'term-remote' }] },
+          'workspace.list': {
+            workspaces: [
+              { id: 'w0', kind: 'worktree', name: 'master', project: 'swarm', path: swarm, branch: 'master', hostId: null },
+              { id: 'w1', kind: 'worktree', name: 'master', project: 'shield-wall', path: shieldWall, branch: 'master', hostId: null }
+            ],
+            truncated: false
+          }
+        }
+      })
+      const worker = await mountWorker(main, { host })
+      const result = (await worker.request('repo.getContext')) as any
+      assert.equal(result.workspacePath, localClone)
+      assert.ok(!result.ambiguous)
+      assert.equal(result.resolvedBy, 'terminal')
+      await worker.deactivate()
+    })
+  } finally {
+    rmSync(parentDir, { recursive: true, force: true })
+  }
+})
+
+test('active remote worktree discovers unlisted local clone on default branch when terminals are empty', async () => {
+  const parentDir = mkdtempSync(join(tmpdir(), 'sources-'))
+  const swarm = join(parentDir, 'swarm')
+  const shieldWall = join(parentDir, 'shield-wall')
+  const localClone = join(parentDir, 'my-remote-repo')
+  mkdirSync(join(swarm, '.git'), { recursive: true })
+  mkdirSync(join(shieldWall, '.git'), { recursive: true })
+  mkdirSync(join(localClone, '.git'), { recursive: true })
+  try {
+    const runner: OrcaRunner = async (cli, args) => {
+      if (args[0] === 'environment' && args[1] === 'list') {
+        return { stdout: JSON.stringify({ ok: true, result: { environments: [{ id: 'env-1', name: 'ml1-wsl' }] } }) }
+      }
+      if (args[0] === 'worktree' && args[1] === 'ps') {
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            result: {
+              worktrees: [
+                {
+                  repo: 'my-remote-repo',
+                  path: '/mnt/c/Projects/my-remote-repo',
+                  branch: 'refs/heads/master',
+                  hasHostSidebarActivity: true,
+                  sidebarStatus: 'active'
+                }
+              ]
+            }
+          })
+        }
+      }
+      throw new Error(`unexpected orca argv: ${args.join(' ')}`)
+    }
+
+    await withOrca(runner, async () => {
+      const host = mockHost({
+        capabilities: ['storage:own', 'workspace:read', 'agent:read'],
+        results: {
+          'workspace.readContext': { branch: 'master', displayName: 'master', terminals: [] },
+          'workspace.list': {
+            workspaces: [
+              { id: 'w0', kind: 'worktree', name: 'master', project: 'swarm', path: swarm, branch: 'master', hostId: null },
+              { id: 'w1', kind: 'worktree', name: 'master', project: 'shield-wall', path: shieldWall, branch: 'master', hostId: null }
+            ],
+            truncated: false
+          }
+        }
+      })
+      const worker = await mountWorker(main, { host })
+      const result = (await worker.request('repo.getContext')) as any
+      assert.equal(result.workspacePath, localClone)
+      assert.ok(!result.ambiguous)
+      await worker.deactivate()
+    })
+  } finally {
+    rmSync(parentDir, { recursive: true, force: true })
+  }
+})

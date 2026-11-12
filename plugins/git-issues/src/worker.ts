@@ -248,7 +248,7 @@ async function lookupActiveRemoteWorktree(
         const parsed = JSON.parse(stdout)
         if (parsed?.ok && Array.isArray(parsed?.result?.worktrees)) {
           const active = parsed.result.worktrees.filter(
-            (wt: any) => Boolean(wt?.hasHostSidebarActivity || wt?.sidebarStatus === 'active' || wt?.isActive)
+            (wt: any) => Boolean(wt?.hasHostSidebarActivity || wt?.sidebarStatus === 'active' || wt?.status === 'active' || wt?.isActive)
           )
           for (const wt of active) {
             const branch = typeof wt?.branch === 'string' ? stripRef(wt.branch) : null
@@ -674,18 +674,36 @@ export function resolveWorkspace(
     matchingProjects.add(focused.project)
   }
 
+  if (focusedPath) {
+    const proj = focusedPath.split(/[/\\]+/).filter(Boolean).pop()
+    if (proj && proj.toLowerCase() !== 'main' && proj.toLowerCase() !== 'master' && proj.toLowerCase() !== activeBranch?.toLowerCase()) {
+      const hasLocalClone =
+        (existsSync(focusedPath) && existsSync(join(focusedPath, '.git'))) ||
+        findLocalCloneForProject(workspaces, proj) !== null
+      if (hasLocalClone) {
+        matchingProjects.add(proj)
+      }
+    }
+  }
+
   const specificProjects = new Set(
-    Array.from(matchingProjects).filter((p) => p !== 'main' && p !== 'master' && p !== activeBranch)
+    Array.from(matchingProjects)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0 && p.toLowerCase() !== 'main' && p.toLowerCase() !== 'master' && p.toLowerCase() !== activeBranch?.toLowerCase())
   )
 
   const isDefaultBranchName = displayName === activeBranch || displayName === 'main' || displayName === 'master'
 
   let byProject = specificProjects.size > 0
     ? pool.filter((w) => {
-        const proj = w.project ?? ''
-        const name = w.name ?? ''
-        const base = w.path.split(/[/\\]+/).filter(Boolean).pop() ?? ''
-        return specificProjects.has(proj) || specificProjects.has(name) || specificProjects.has(base)
+        const proj = (w.project ?? '').toLowerCase()
+        const name = (w.name ?? '').toLowerCase()
+        const base = (w.path.split(/[/\\]+/).filter(Boolean).pop() ?? '').toLowerCase()
+        for (const sp of specificProjects) {
+          const s = sp.toLowerCase()
+          if (proj === s || name === s || base === s) return true
+        }
+        return false
       })
     : []
 
@@ -741,7 +759,14 @@ export function resolveWorkspace(
   }
 
   if (matches.length === 1) {
-    return { workspacePath: matches[0].path, activeBranch, key, ambiguous: false, resolvedBy: 'unique', candidates: [] }
+    return {
+      workspacePath: matches[0].path,
+      activeBranch,
+      key,
+      ambiguous: false,
+      resolvedBy: focusedPath ? 'terminal' : 'unique',
+      candidates: []
+    }
   }
 
   if (focusedPath) {
@@ -751,8 +776,12 @@ export function resolveWorkspace(
     }
     const focusedProject = focusedPath.split(/[/\\]+/).filter(Boolean).pop()
     if (focusedProject) {
+      const fpLower = focusedProject.toLowerCase()
       const byProjectMatch = matches.find(
-        (w) => w.project === focusedProject || w.name === focusedProject || w.path.endsWith('/' + focusedProject)
+        (w) =>
+          (w.project && w.project.toLowerCase() === fpLower) ||
+          (w.name && w.name.toLowerCase() === fpLower) ||
+          w.path.toLowerCase().endsWith('/' + fpLower)
       )
       if (byProjectMatch) {
         return { workspacePath: byProjectMatch.path, activeBranch, key, ambiguous: false, resolvedBy: 'terminal', candidates: [] }
