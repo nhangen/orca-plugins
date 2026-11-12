@@ -1584,3 +1584,57 @@ test('project matching ignores case between the remote name and the local worksp
     assert.ok(!resolution.ambiguous)
   }
 ))
+
+test('a terminal title naming the only matching workspace still resolves it without a picker', withTempWorkspaces(
+  ['wb-feat'],
+  async ([feat]) => {
+    const resolution = main.resolveWorkspace(
+      { branch: 'feat', displayName: 'My Feature', terminals: [{ id: 't1', title: 'Task | feat-wt' }] },
+      [localEntry('w0', 'feat-wt', feat, 'feat')],
+      new Map()
+    )
+    assert.equal(resolution.workspacePath, feat)
+    assert.ok(!resolution.ambiguous)
+  }
+))
+
+test('a stray terminal title does not pull an unrelated clone over a confident match', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'roots-'))
+  try {
+    const feat = join(root, 'feat-wt')
+    mkdirSync(join(feat, '.git'), { recursive: true })
+    mkdirSync(join(root, 'other', '.git'), { recursive: true })
+    const resolution = main.resolveWorkspace(
+      { branch: 'feat', displayName: 'My Feature', terminals: [{ id: 't1', title: 'user@host:~/code/other $' }] },
+      [localEntry('w0', 'feat-wt', feat, 'feat')],
+      new Map()
+    )
+    assert.equal(resolution.workspacePath, feat)
+    assert.ok(!resolution.ambiguous)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('trusted signals that name two different clones keep the picker', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'roots-'))
+  try {
+    const alpha = join(root, 'alpha')
+    const beta = join(root, 'beta')
+    for (const dir of [alpha, beta, join(root, 'ws')]) mkdirSync(join(dir, '.git'), { recursive: true })
+    const resolution = main.resolveWorkspace(
+      { branch: 'main', displayName: 'cloud-dev', terminals: [{ id: 't-remote' }] },
+      [
+        localEntry('w0', 'ws', join(root, 'ws'), 'other'),
+        { id: 'w1', kind: 'worktree', name: 'cloud-dev', project: 'alpha', path: '/remote/alpha', branch: 'main', hostId: 'ssh-box' },
+        { id: 'w2', kind: 'worktree', name: 'box-2', project: 'beta', path: '/remote/beta', branch: 'main', hostId: 'ssh-box' }
+      ],
+      new Map(),
+      new Map([['t-remote', 'w2']])
+    )
+    assert.ok(resolution.ambiguous)
+    assert.deepEqual(resolution.candidates.map((c) => c.path).sort(), [alpha, beta])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

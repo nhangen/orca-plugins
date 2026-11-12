@@ -614,6 +614,10 @@ function baseName(path: string): string {
   return path.split(/[/\\]+/).filter(Boolean).pop() ?? ''
 }
 
+function discoveredEntry(path: string): WorkspaceEntry {
+  return { id: `discovered:${path}`, kind: 'worktree', name: baseName(path), project: baseName(path), path, branch: null, hostId: 'local' }
+}
+
 function matchesProject(w: WorkspaceEntry, projects: Set<string>): boolean {
   const names = [w.project ?? '', w.name ?? '', baseName(w.path)].map((n) => n.toLowerCase())
   return names.some((n) => n.length > 0 && projects.has(n))
@@ -668,21 +672,25 @@ export function resolveWorkspace(
   addTo(display, displayName)
 
   const trustedMatches = trusted.size > 0 ? pool.filter((w) => matchesProject(w, trusted)) : []
-  let discovered: WorkspaceEntry | null = null
+  const trustedClones: WorkspaceEntry[] = []
   if (trusted.size > 0 && trustedMatches.length === 0) {
     for (const proj of trusted) {
       const clonePath = findLocalCloneForProject(workspaces, proj)
-      if (clonePath) {
-        discovered = { id: `discovered:${clonePath}`, kind: 'worktree', name: baseName(clonePath), project: baseName(clonePath), path: clonePath, branch: null, hostId: 'local' }
-        break
-      }
+      if (clonePath && !trustedClones.some((w) => w.path === clonePath)) trustedClones.push(discoveredEntry(clonePath))
     }
   }
-  if (discovered) {
-    return { workspacePath: discovered.path, activeBranch, key, ambiguous: false, resolvedBy: 'discovered', candidates: [] }
+  if (trustedClones.length === 1) {
+    return { workspacePath: trustedClones[0].path, activeBranch, key, ambiguous: false, resolvedBy: 'discovered', candidates: [] }
   }
 
-  const byProject = trustedMatches.length > 0 ? trustedMatches : display.size > 0 ? pool.filter((w) => matchesProject(w, display)) : []
+  const byProject =
+    trustedMatches.length > 0
+      ? trustedMatches
+      : trustedClones.length > 0
+        ? trustedClones
+        : display.size > 0
+          ? pool.filter((w) => matchesProject(w, display))
+          : []
   const ruledOut = trusted.size > 0 && trustedMatches.length === 0
 
   const onBranch = activeBranch != null ? pool.filter((w) => w.branch != null && stripRef(w.branch) === activeBranch) : []
@@ -703,15 +711,18 @@ export function resolveWorkspace(
   // A folder workspace has no branch, so its name is the only signal that can match it.
   const namedFolders = named.filter((w) => w.branch == null)
 
-  let matches = [both, namedFolders, byProject, ruledOut ? [] : onBranch, ruledOut ? [] : named].find((list) => list.length > 0) ?? []
+  const confident = [both, namedFolders, byProject].find((list) => list.length > 0)
+  let matches = confident ?? [ruledOut ? [] : onBranch, ruledOut ? [] : named].find((list) => list.length > 0) ?? []
 
-  let weakPick = weak.size > 0 ? matches.find((w) => matchesProject(w, weak)) : undefined
-  if (!weakPick && weak.size > 0 && !ruledOut) {
+  const weakPick = weak.size > 0 ? matches.find((w) => matchesProject(w, weak)) : undefined
+  // Only a guess among default-branch clones may add an unlisted repo, and it never resolves alone.
+  let weakClone: WorkspaceEntry | undefined
+  if (!weakPick && !confident && !ruledOut && isDefaultBranchName) {
     for (const proj of weak) {
       const clonePath = findLocalCloneForProject(workspaces, proj)
       if (clonePath && !matches.some((w) => w.path === clonePath)) {
-        weakPick = { id: `discovered:${clonePath}`, kind: 'worktree', name: baseName(clonePath), project: baseName(clonePath), path: clonePath, branch: null, hostId: 'local' }
-        matches = [weakPick, ...matches]
+        weakClone = discoveredEntry(clonePath)
+        matches = [weakClone, ...matches]
         break
       }
     }
@@ -724,7 +735,7 @@ export function resolveWorkspace(
   const isFocusedPath = (w: WorkspaceEntry): boolean =>
     focusedPath != null && (w.path === focusedPath || matchesProject(w, new Set([baseName(focusedPath).toLowerCase()])))
 
-  if (matches.length === 1 && matches[0] !== weakPick) {
+  if (matches.length === 1 && !weakClone) {
     return {
       workspacePath: matches[0].path,
       activeBranch,
@@ -762,7 +773,7 @@ export function resolveWorkspace(
   }
   const picked = matches.find((w) => w.path === choices.get(key))
   return {
-    workspacePath: (picked ?? weakPick ?? matches[0]).path,
+    workspacePath: (picked ?? weakPick ?? weakClone ?? matches[0]).path,
     activeBranch,
     key,
     ambiguous: true,
