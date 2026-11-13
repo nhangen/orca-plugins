@@ -18,9 +18,9 @@
       },
       "releases": [
         {
-          "version": "0.1.7",
-          "commit": "fb3eb954e482594ec4b82d0d5430c0c430a15c24",
-          "contentHash": "3ff5ff4b6e86ade5047a42bae32c069f279489b0730f0e1bf0707007ada6a453",
+          "version": "0.1.8",
+          "commit": "1d68a27ef6eb330cae973a7739327ee35649b5ba",
+          "contentHash": "3be8bb17e1542e5d24408f9e059ebbcb6b66f9907081258d1fdd799d34aaaffc",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.248",
           "name": "Git Issues, PRs & Branches",
@@ -54,20 +54,47 @@
             "cover": {
               "path": "plugins/git-issues/assets/cover.png",
               "alt": "Git Issues, PRs & Branches for Orca",
-              "sha256": "0e1d190fc9acdf7819484020c72d59cb4c85275cc6e15894bf8277c03cf057fe",
+              "sha256": "9404088cf0265d5034cd14e191c3aa8efc9173463ae9e3e00afc535f89bd2980",
               "width": 1600,
               "height": 1000
             },
             "screenshots": [
               {
                 "path": "plugins/git-issues/assets/screenshot.png",
-                "alt": "Git Issues, PRs and Branches sidebar panel in Orca",
-                "sha256": "b3a91828c65edca613b21e3d9d8fd6daeecd9e96700c296ad594e0588573bb23",
-                "width": 1676,
-                "height": 1000
+                "alt": "Git Issues, PRs and Branches panel with synthetic example repository data",
+                "sha256": "00f5fd78e28559d4a003a3cfeaed056c2a74a813ff4cd1db44f4071ddd06b3f6",
+                "width": 1280,
+                "height": 896
               }
             ]
           }
+        },
+        {
+          "version": "0.1.7",
+          "commit": "fb3eb954e482594ec4b82d0d5430c0c430a15c24",
+          "contentHash": "3ff5ff4b6e86ade5047a42bae32c069f279489b0730f0e1bf0707007ada6a453",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Git Issues, PRs & Branches",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Git Issues, PRs & Branches"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            },
+            {
+              "kind": "events",
+              "name": "agent.status.changed"
+            }
+          ],
+          "capabilities": [
+            "storage:own",
+            "workspace:read",
+            "agent:read"
+          ]
         },
         {
           "version": "0.1.6",
@@ -94,32 +121,7 @@
             "storage:own",
             "workspace:read",
             "agent:read"
-          ],
-          "images": {
-            "icon": {
-              "path": "plugins/git-issues/assets/icon.png",
-              "alt": "Git Issues, PRs & Branches",
-              "sha256": "94af8f3325d7353bacd1dd8627cd16ce68dc6e49942b01137e53a8db2ff7f0b6",
-              "width": 256,
-              "height": 256
-            },
-            "cover": {
-              "path": "plugins/git-issues/assets/cover.png",
-              "alt": "Git Issues, PRs & Branches for Orca",
-              "sha256": "0e1d190fc9acdf7819484020c72d59cb4c85275cc6e15894bf8277c03cf057fe",
-              "width": 1600,
-              "height": 1000
-            },
-            "screenshots": [
-              {
-                "path": "plugins/git-issues/assets/screenshot.png",
-                "alt": "Git Issues, PRs and Branches sidebar panel in Orca",
-                "sha256": "b3a91828c65edca613b21e3d9d8fd6daeecd9e96700c296ad594e0588573bb23",
-                "width": 1676,
-                "height": 1000
-              }
-            ]
-          }
+          ]
         },
         {
           "version": "0.1.5",
@@ -141,32 +143,7 @@
           "capabilities": [
             "storage:own",
             "workspace:read"
-          ],
-          "images": {
-            "icon": {
-              "path": "plugins/git-issues/assets/icon.png",
-              "alt": "Git Issues, PRs & Branches",
-              "sha256": "94af8f3325d7353bacd1dd8627cd16ce68dc6e49942b01137e53a8db2ff7f0b6",
-              "width": 256,
-              "height": 256
-            },
-            "cover": {
-              "path": "plugins/git-issues/assets/cover.png",
-              "alt": "Git Issues, PRs & Branches for Orca",
-              "sha256": "0e1d190fc9acdf7819484020c72d59cb4c85275cc6e15894bf8277c03cf057fe",
-              "width": 1600,
-              "height": 1000
-            },
-            "screenshots": [
-              {
-                "path": "plugins/git-issues/assets/screenshot.png",
-                "alt": "Git Issues, PRs and Branches sidebar panel in Orca",
-                "sha256": "b3a91828c65edca613b21e3d9d8fd6daeecd9e96700c296ad594e0588573bb23",
-                "width": 1676,
-                "height": 1000
-              }
-            ]
-          }
+          ]
         },
         {
           "version": "0.1.4",
@@ -188,32 +165,7 @@
           "capabilities": [
             "storage:own",
             "workspace:read"
-          ],
-          "images": {
-            "icon": {
-              "path": "plugins/git-issues/assets/icon.png",
-              "alt": "Git Issues, PRs & Branches",
-              "sha256": "94af8f3325d7353bacd1dd8627cd16ce68dc6e49942b01137e53a8db2ff7f0b6",
-              "width": 256,
-              "height": 256
-            },
-            "cover": {
-              "path": "plugins/git-issues/assets/cover.png",
-              "alt": "Git Issues, PRs & Branches for Orca",
-              "sha256": "0e1d190fc9acdf7819484020c72d59cb4c85275cc6e15894bf8277c03cf057fe",
-              "width": 1600,
-              "height": 1000
-            },
-            "screenshots": [
-              {
-                "path": "plugins/git-issues/assets/screenshot.png",
-                "alt": "Git Issues, PRs and Branches sidebar panel in Orca",
-                "sha256": "b3a91828c65edca613b21e3d9d8fd6daeecd9e96700c296ad594e0588573bb23",
-                "width": 1676,
-                "height": 1000
-              }
-            ]
-          }
+          ]
         },
         {
           "version": "0.1.3",
