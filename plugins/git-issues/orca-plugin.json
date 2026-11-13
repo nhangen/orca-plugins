@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "git-issues",
   "name": "Git Issues, PRs & Branches",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Show GitHub issues, pull requests, and git branches for the currently loaded repository in Orca's sidebar.",
   "license": "MIT",
   "icon": "assets/icon.png",
@@ -13,8 +13,8 @@
   "screenshots": [
     {
       "path": "assets/screenshot.png",
-      "alt": "Git Issues, PRs and Branches sidebar panel in Orca",
-      "caption": "Track issues, pull requests, and branches directly in Orca sidebar",
+      "alt": "Git Issues, PRs and Branches panel with synthetic example repository data",
+      "caption": "Example issues and branch context. All repository data shown is synthetic.",
       "theme": "dark"
     }
   ],

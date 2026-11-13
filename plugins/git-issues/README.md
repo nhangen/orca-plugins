@@ -6,7 +6,9 @@ An Orca sidebar plugin that displays GitHub issues, pull requests, and git branc
 
 ## Overview
 
-![Screenshot](assets/screenshot.png)
+![Panel showing synthetic example repository data](assets/screenshot.png)
+
+Screenshots use synthetic repository data and show only the plugin panel.
 
 ## Features
 
