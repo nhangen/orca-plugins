@@ -3,3 +3,12 @@ node_modules/
 .orca/
 dist/
 *.log
+
+/AGENTS.md
+/CLAUDE.md
+/.claude/skills/gitnexus-cli/SKILL.md
+/.claude/skills/gitnexus-debugging/SKILL.md
+/.claude/skills/gitnexus-exploring/SKILL.md
+/.claude/skills/gitnexus-guide/SKILL.md
+/.claude/skills/gitnexus-impact-analysis/SKILL.md
+/.claude/skills/gitnexus-refactoring/SKILL.md
